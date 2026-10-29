@@ -1,0 +1,18 @@
+@echo off
+rem Rebuilds hot-reloadable modules into build\modules\. Usage: build_module.bat [anim|equip|pose]  (default: all). The running game reloads them within ~1 second.
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
+if not exist "%~dp0build\modules" mkdir "%~dp0build\modules"
+cd /d "%~dp0build\modules"
+set WHAT=%1
+if "%WHAT%"=="" set WHAT=all
+if "%WHAT%"=="anim" goto anim
+if "%WHAT%"=="equip" goto equip
+if "%WHAT%"=="pose" goto pose
+:anim
+cl /nologo /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /LD "%~dp0anim_module.c" /Fe:anim.dll /Fo:anim_module.obj || exit /b 1
+if "%WHAT%"=="anim" exit /b 0
+:equip
+cl /nologo /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /LD "%~dp0equip_module.c" /Fe:equip.dll /Fo:equip_module.obj || exit /b 1
+if "%WHAT%"=="equip" exit /b 0
+:pose
+cl /nologo /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /LD "%~dp0pose_module.c" /Fe:pose.dll /Fo:pose_module.obj || exit /b 1

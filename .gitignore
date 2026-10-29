@@ -1,0 +1,29 @@
+# Game files and anything derived from them must never be committed
+game-test/
+downloads/
+script-excluded/
+modkit/
+
+# Build output, logs, runtime config
+native/build/
+helper/build/
+nettest/
+*.log
+*.obj
+*.exp
+*.lib
+*.pdb
+*.dll
+*.exe
+last_run.txt*
+cfg_*.txt
+try_clip.txt*
+pose_skip.txt*
+pose_mode.txt
+pose_off.txt
+equip_off.txt
+scan.txt
+
+# Local screenshots and scratch
+*.png
+*.webp

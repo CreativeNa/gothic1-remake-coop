@@ -1,0 +1,8 @@
+{
+	"name": "G1RCoop",
+	"title": "G1R Coop (spike)",
+	"author": "G1R Coop project",
+	"description": "Co-op experiments for Gothic 1 Remake",
+	"modVersion": "0.0.1",
+	"loadOrder": "late"
+}
