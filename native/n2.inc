@@ -123,9 +123,14 @@ static int net_init(void)
     if (bind(T.sock, (struct sockaddr *)&a, sizeof a) != 0) { logf_("net: bind %d failed %d", lport, WSAGetLastError()); return 0; }
     memset(&T.peer, 0, sizeof T.peer);
     T.peer.sin_family = AF_INET; T.peer.sin_port = htons((u_short)pport);
-    inet_pton(AF_INET, host, &T.peer.sin_addr);
+    if (inet_pton(AF_INET, host, &T.peer.sin_addr) != 1) {              /* not a dotted address: resolve the host name */
+        struct addrinfo hints, *res = NULL; memset(&hints, 0, sizeof hints); hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
+        if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) { logf_("net: cannot resolve peer host '%s'", host); return 0; }
+        T.peer.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr; freeaddrinfo(res);
+    }
     u_long nb = 1; ioctlsocket(T.sock, FIONBIO, &nb);
-    logf_("net: id=%s local :%d -> %s:%d", T.id, lport, host, pport);
+    char ipbuf[64]; inet_ntop(AF_INET, &T.peer.sin_addr, ipbuf, sizeof ipbuf);
+    logf_("net: id=%s local :%d -> %s (%s):%d; packets from other addresses are ignored", T.id, lport, host, ipbuf, pport);
     return 1;
 }
 
@@ -1022,11 +1027,17 @@ static void frame_work(void)
                 }
             }
         }
+        if (T.net_ok && !T.have_remote && T.frame % 600 == 0) logf_("net: still waiting for the first packet from the friend (check the address, the port and the firewall)");
         if (T.net_ok) {
             char rx[1700];
             for (;;) {
-                int n = recvfrom(T.sock, rx, sizeof rx - 1, 0, NULL, NULL);
+                struct sockaddr_in from; int fromlen = sizeof from;
+                int n = recvfrom(T.sock, rx, sizeof rx - 1, 0, (struct sockaddr *)&from, &fromlen);
                 if (n <= 0) break;
+                if (from.sin_addr.s_addr != T.peer.sin_addr.s_addr) {           /* only the configured friend may talk to us */
+                    static int rejected; if (rejected++ < 3) { char fb[64]; inet_ntop(AF_INET, &from.sin_addr, fb, sizeof fb); logf_("net: ignored a packet from %s", fb); }
+                    continue;
+                }
                 rx[n] = 0;
                 if (n > 4 && rx[0] == 'B' && rx[1] == '|') {
                     int k = (uint8_t)rx[2], count = (uint8_t)rx[3], pl = n - 4;

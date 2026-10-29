@@ -2,7 +2,8 @@
 #   A: 1280x720 on the primary monitor.  B: 1280x720 on the second monitor (primary if there is only one).
 #   B keeps minimum graphics settings (two full instances overloaded this PC once); the resolution is the same as A's.
 # Each instance gets native\build\cfg_<pid>.txt: "<localPort> <peerHost> <peerPort> <id>" (A:40001 <-> B:40002).
-param([string]$Dll = "coopdll_8.dll", [int]$WaitSeconds = 45)
+param([string]$Dll = "coopdll_8.dll", [int]$WaitSeconds = 45,
+      [switch]$ViaJoin)   # configure and inject through tools\join.ps1 (the same path a friend uses), peers addressed as 127.0.0.1
 $c = "C:\Program Files (x86)\Steam\steamapps\common\Gothic1R-coop"
 $exe = "$c\game-test\G1R\Binaries\Win64\G1R-Win64-Shipping.exe"
 $nat = "$c\native\build"
@@ -25,7 +26,12 @@ $pa = Start-Process $exe -ArgumentList $argsA -WorkingDirectory (Split-Path $exe
 Start-Sleep 8
 $pb = Start-Process $exe -ArgumentList $argsB -WorkingDirectory (Split-Path $exe) -PassThru
 "A pid $($pa.Id) at $ax,$ay ; B pid $($pb.Id) at $bx,$by"
-Set-Content "$nat\cfg_$($pa.Id).txt" "40001 127.0.0.1 40002 A"
-Set-Content "$nat\cfg_$($pb.Id).txt" "40002 127.0.0.1 40001 B"
 Start-Sleep $WaitSeconds
-foreach ($p in $pa, $pb) { & "$nat\inject.exe" $p.Id "$nat\$Dll" }
+if ($ViaJoin) {
+    & "$PSScriptRoot\join.ps1" -Peer "127.0.0.1:40002" -LocalPort 40001 -Id A -Dll $Dll -ProcessId $pa.Id
+    & "$PSScriptRoot\join.ps1" -Peer "localhost:40001" -LocalPort 40002 -Id B -Dll $Dll -ProcessId $pb.Id
+} else {
+    Set-Content "$nat\cfg_$($pa.Id).txt" "40001 127.0.0.1 40002 A"
+    Set-Content "$nat\cfg_$($pb.Id).txt" "40002 127.0.0.1 40001 B"
+    foreach ($p in $pa, $pb) { & "$nat\inject.exe" $p.Id "$nat\$Dll" }
+}
