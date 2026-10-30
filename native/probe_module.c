@@ -537,6 +537,13 @@ static void autoload_tick(void)
     AL.tries++; AL.last_try = now; A->log("PR autoload: pressed 'Continue' (try %d) %.1f s after the process started", AL.tries, proc_age_s());
 }
 
+#if defined(__has_include)
+#if __has_include("local_god.inc")
+#include "local_god.inc"
+#define HAVE_LOCAL_GOD 1
+#endif
+#endif
+
 /* frame statistics of this game process: engine ticks per second and the worst frame, with a flag whether its window is the foreground one */
 static void frame_stats(void)
 {
@@ -557,6 +564,9 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
 {
     A = a;
     frame_stats();
+#ifdef HAVE_LOCAL_GOD
+    __try { local_god_tick(); } __except (EXCEPTION_EXECUTE_HANDLER) { }
+#endif
     __try { autoload_tick(); } __except (EXCEPTION_EXECUTE_HANDLER) { a->log("PR autoload: exception 0x%lx, skipped", GetExceptionCode()); }
     unsigned long now = GetTickCount();
     if (now - g_last_poll < 250) return;
