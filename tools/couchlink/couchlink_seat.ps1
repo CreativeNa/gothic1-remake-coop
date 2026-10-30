@@ -24,7 +24,7 @@ try {
     }
     if (-not $proc) { Log "seat ${Seat}: game process not found"; exit 1 }
     Log "seat ${Seat}: game pid $($proc.Id)"
-    Start-Sleep ($SettleSeconds + 5 * $Seat)                              # seat 1 starts while seat 0 loads the save: its engine is slower, at 13 s it was not ready (no GameEngine)
+    Start-Sleep ($SettleSeconds + 1 * $Seat)                              # seat 1 starts while seat 0 loads the save: its engine is slower, at 13 s it was not ready (no GameEngine)
     $local = $BasePort + $Seat
     $peerPort = $BasePort + (1 - $Seat)
     Set-Content "$nat\cfg_$($proc.Id).txt" "$local $Peer $peerPort S$Seat"
