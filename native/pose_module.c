@@ -182,6 +182,34 @@ static void send_pose(CoreAPI *a)
 }
 
 /* ---------------- receiver ---------------- */
+/* crash bisecting: build\pose_variant.txt = "seat0=minimal seat1=noextra". The seat comes from the "-CoopSeat=N" argument Couchlink passes.
+ *   minimal  = only add the PoseableMeshComponent to the puppet, nothing else (no mesh, no attach, no collision calls, no LOD, no bones)
+ *   noextra  = mesh + attach, but no collision calls and no forced LOD
+ *   full     = everything (default) */
+static int my_seat_no(void)
+{
+    static int seat = -2;
+    if (seat == -2) { const char *c = strstr(GetCommandLineA(), "-CoopSeat="); seat = c ? atoi(c + 10) : -1; }
+    return seat;
+}
+static int variant_of_seat(void)                              /* 0 full, 1 minimal, 2 noextra */
+{
+    static unsigned long t; static int v;
+    unsigned long now = GetTickCount();
+    if (now - t < 1000) return v;
+    t = now; v = 0;
+    FILE *f = fopen("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_variant.txt", "r");
+    if (f) {
+        char line[200] = ""; if (fgets(line, sizeof line, f)) {
+            char key[24]; snprintf(key, sizeof key, "seat%d=", my_seat_no());
+            char *p = strstr(line, key);
+            if (p) { p += strlen(key); if (!strncmp(p, "minimal", 7)) v = 1; else if (!strncmp(p, "noextra", 7)) v = 2; }
+        }
+        fclose(f);
+    }
+    return v;
+}
+
 static int ensure_comp(CoreAPI *a)
 {
     if (P.comp && P.comp_puppet == a->puppet && a->obj_alive(P.comp, NULL)) return 1;
@@ -198,6 +226,12 @@ static int ensure_comp(CoreAPI *a)
     a->call_fn(a->puppet, "Actor", "AddComponentByClass", 4, names, vals, sizes, &comp, 8);
     a->log("P AddComponentByClass -> %p", comp);
     if (!comp) { P.failed++; return 0; }
+    int variant = variant_of_seat();
+    if (variant == 1) {                                     /* minimal: the bare component, nothing else */
+        P.comp = comp; P.comp_puppet = a->puppet;
+        a->log("P variant MINIMAL (seat %d): poseable component %p added and left alone", my_seat_no(), comp);
+        return 1;
+    }
     uint8_t *asset = ptr_prop(a, a->puppet_mesh, "SkinnedAsset");
     uint8_t reinit = 1;
     const char *n2[2] = { "NewMesh", "bReinitPose" }; const void *v2[2] = { &asset, &reinit }; int s2[2] = { 8, 1 };
@@ -206,7 +240,7 @@ static int ensure_comp(CoreAPI *a)
     const char *n3[6] = { "Parent", "SocketName", "LocationRule", "RotationRule", "ScaleRule", "bWeldSimulatedBodies" };
     const void *v3[6] = { &par, "None", &snap, &snap, &snap, &weld }; int s3[6] = { 8, -1, 1, 1, 1, 1 };
     a->call_fn(comp, "SceneComponent", "K2_AttachToComponent", 6, n3, v3, s3, NULL, 0);
-    {   /* no collision at all on the puppet mesh: the local hero's sword must not be able to hit it */
+    if (variant != 2) {   /* no collision at all on the puppet mesh: the local hero's sword must not be able to hit it */
         uint8_t none = 0, ignore = 0;
         call1(a, comp, "PrimitiveComponent", "SetCollisionEnabled", "NewType", &none, 1, NULL, 0);
         call1(a, comp, "PrimitiveComponent", "SetCollisionResponseToAllChannels", "NewResponse", &ignore, 1, NULL, 0);
@@ -214,7 +248,8 @@ static int ensure_comp(CoreAPI *a)
         call1(a, comp, "PrimitiveComponent", "SetGenerateOverlapEvents", "bInGenerateOverlapEvents", &off, 1, NULL, 0);
     }
     int lod0 = 1;                                           /* forced LOD 0 (1-based): distant LODs drop bones and the skin then stretches */
-    call1(a, comp, "SkinnedMeshComponent", "SetForcedLOD", "InNewForcedLOD", &lod0, 4, NULL, 0);
+    if (variant != 2) call1(a, comp, "SkinnedMeshComponent", "SetForcedLOD", "InNewForcedLOD", &lod0, 4, NULL, 0);
+    if (variant == 2) a->log("P variant NOEXTRA (seat %d): mesh + attach only, no collision calls, no forced LOD", my_seat_no());
     set_visible(a, comp, 1);
     if (!P.nohide) set_visible(a, a->puppet_mesh, 0);
     P.comp = comp; P.comp_puppet = a->puppet; P.last_seq = 0; P.applied = 0;
@@ -315,6 +350,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (P.off || P.nocomp || P.failed > 3 || !a->have_remote || !a->puppet || !a->puppet_mesh) return;
     if (!ensure_comp(a)) return;
     if (now - P.last_vis > 1000) { P.last_vis = now; if (!P.nohide) set_visible(a, a->puppet_mesh, 0); }   /* keep the clip-driven mesh hidden */
+    if (variant_of_seat() == 1) return;                     /* minimal variant: no bones are applied */
     if (a->remote_blob_seq != P.last_seq) { P.last_seq = a->remote_blob_seq; apply_blob(a); }
 }
 
