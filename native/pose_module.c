@@ -210,6 +210,8 @@ static int variant_of_seat(void)                              /* 0 full, 1 minim
     return v;
 }
 
+static void interp_reset(void);
+
 /* The game's BFGTickOptimizerSystem throttles actors by distance and tracks components by class. A crash after "hit, then run away from the puppet" had that system
  * (and BFGInterpolationSystem) on the stack. Probe: ask it whether the puppet is registered and, with build\pose_tickopt_off.txt, switch the optimizer off. */
 static const char *first_param(const char *desc, char *out, size_t cap)          /* "Actor@0/8 ReturnValue@8/1" -> "Actor" */
@@ -303,11 +305,23 @@ static int ensure_comp(CoreAPI *a)
     set_visible(a, comp, P.away ? 0 : 1);                   /* a new component starts hidden if the friend is not sending poses */
     if (!P.nohide) set_visible(a, a->puppet_mesh, 0);
     P.comp = comp; P.comp_puppet = a->puppet; P.last_seq = 0; P.applied = 0;
+    interp_reset();                                         /* a new component starts from the reference pose: the first received pose is applied at once */
+    memset(P.last, 0, sizeof P.last);
     a->set_attach_target(comp);
     a->log("P puppet now bone-driven: comp %p asset %p", comp, asset);
     tickopt_probe(a);
     return 1;
 }
+
+/* ---- smooth playback: a received pose is not applied at once. Every frame the displayed pose moves from where it is towards the newest pose over the
+ * measured time between packets (about 50 ms), so the 20 Hz stream looks like the game's frame rate. Only bones that move are touched (1 call each). ---- */
+static struct {
+    struct { double q[4], t[3]; } prev[MAXB], tgt[MAXB], cur[MAXB];
+    uint8_t active[MAXB];
+    double t0, last_blob, dt, cost; int have_pose, stride; unsigned long frame, log_n;
+} I;
+static double now_ms(void) { static LARGE_INTEGER f; LARGE_INTEGER c; if (!f.QuadPart) QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return (double)c.QuadPart * 1000.0 / (double)f.QuadPart; }
+static void interp_reset(void) { memset(&I, 0, sizeof I); I.stride = 1; }
 
 static void apply_blob(CoreAPI *a)
 {
@@ -316,7 +330,7 @@ static void apply_blob(CoreAPI *a)
     int n = b[0] | (b[1] << 8);
     if (n > MAXB || len < 2 + n * 12 + 2) return;
     if (P.nb != n) return;                                    /* bone names/parents come from this process's own hero mesh (same asset); wait for them */
-    static uint8_t chg[MAXB]; static Transform todo[MAXB]; static int todo_idx[MAXB]; int ntodo = 0;
+    static uint8_t chg[MAXB];
     int16_t sc[MAXB][3];
     for (int i = 0; i < n; i++) sc[i][0] = sc[i][1] = sc[i][2] = 1000;
     int ns = b[2 + n * 12] | (b[3 + n * 12] << 8);
@@ -325,31 +339,63 @@ static void apply_blob(CoreAPI *a)
         int16_t e[4]; memcpy(e, b + 4 + n * 12 + k * 8, 8);
         if (e[0] >= 0 && e[0] < n) { sc[e[0]][0] = e[1]; sc[e[0]][1] = e[2]; sc[e[0]][2] = e[3]; }
     }
+    double t = now_ms();
+    if (I.last_blob > 0) { double d = t - I.last_blob; if (d < 20) d = 20; if (d > 160) d = 160; I.dt = I.dt > 0 ? I.dt * 0.8 + d * 0.2 : d; }
+    I.last_blob = t; I.t0 = t; if (I.dt <= 0) I.dt = 50;
+    int first = !I.have_pose;
     for (int i = 0; i < n; i++) {
         int16_t v[9]; memcpy(v, b + 2 + i * 12, 12); memcpy(v + 6, sc[i], 6);
         int changed = memcmp(v, P.last[i], 18) != 0;
         memcpy(P.last[i], v, 18);
-        if (P.parent[i] >= 0 && chg[P.parent[i]]) changed = 1;   /* a bone follows its parent: skip only when the whole chain is unchanged */
+        if (P.parent[i] >= 0 && chg[P.parent[i]]) changed = 1;   /* a bone follows its parent */
         chg[i] = (uint8_t)changed;
-        if (!changed) continue;
-        if (P.skip[i]) continue;                                     /* build\pose_skip.txt: "min=N;substr;substr" bones the receiver must leave alone (bisecting the sword-draw bug) */
-        if (strncmp(P.names[i], "ik_", 3) == 0) continue;              /* IK helper bones (they come alive with a drawn sword): nothing is skinned to them, their poses only disturb the rest */
-        if (i > 0 && !(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) continue;   /* the hero's mesh gives identity-at-origin for bones it does not animate (face bones): keep their reference pose, do not pull them to the feet */
-        double x = v[0] / 32767.0, y = v[1] / 32767.0, z = v[2] / 32767.0;
-        double w2 = 1.0 - x * x - y * y - z * z;
-        Transform *tr = &todo[ntodo]; memset(tr, 0, sizeof *tr);
-        tr->q[0] = x; tr->q[1] = y; tr->q[2] = z; tr->q[3] = w2 > 0 ? sqrt(w2) : 0;
-        tr->t[0] = v[3] / 50.0; tr->t[1] = v[4] / 50.0; tr->t[2] = v[5] / 50.0;
-        tr->s[0] = v[6] / 1000.0; tr->s[1] = v[7] / 1000.0; tr->s[2] = v[8] / 1000.0;
-        todo_idx[ntodo++] = i;
+        I.active[i] = 0;
+        if (P.skip[i]) continue;                                     /* build\pose_skip.txt: bones the receiver must leave alone */
+        if (strncmp(P.names[i], "ik_", 3) == 0) continue;              /* IK helper bones: nothing is skinned to them, their poses only disturb the rest */
+        if (i > 0 && !(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) continue;   /* bones the hero's mesh does not animate (face ...): keep their reference pose */
+        double x = v[0] / 32767.0, y = v[1] / 32767.0, z = v[2] / 32767.0, w2 = 1.0 - x * x - y * y - z * z;
+        double q[4] = { x, y, z, w2 > 0 ? sqrt(w2) : 0 }, tt[3] = { v[3] / 50.0, v[4] / 50.0, v[5] / 50.0 };
+        memcpy(I.tgt[i].q, q, sizeof q); memcpy(I.tgt[i].t, tt, sizeof tt);
+        if (first) { memcpy(I.cur[i].q, q, sizeof q); memcpy(I.cur[i].t, tt, sizeof tt); }
+        memcpy(I.prev[i].q, I.cur[i].q, sizeof q); memcpy(I.prev[i].t, I.cur[i].t, sizeof tt);          /* the new interval starts from what is displayed now */
+        double dq = fabs(I.cur[i].q[0] - q[0]) + fabs(I.cur[i].q[1] - q[1]) + fabs(I.cur[i].q[2] - q[2]) + fabs(I.cur[i].q[3] - q[3]);
+        double dt3 = fabs(I.cur[i].t[0] - tt[0]) + fabs(I.cur[i].t[1] - tt[1]) + fabs(I.cur[i].t[2] - tt[2]);
+        I.active[i] = (uint8_t)(first || changed || dq > 1e-4 || dt3 > 0.03);
     }
-    uint8_t space = P.mode == 2 ? 0 : 1;                      /* EBoneSpaces: 0 world, 1 component */
-    for (int pass = 0; pass < (P.mode == 3 ? 2 : 1); pass++)  /* mode 3: a second pass, in case parents were stale during the first */
-        for (int k = 0; k < ntodo; k++) {
-            const char *names[3] = { "BoneName", "InTransform", "BoneSpace" }; const void *vals[3] = { P.fnm[todo_idx[k]], &todo[k], &space }; int sizes[3] = { -2, (int)sizeof(Transform), 1 };
-            a->call_fn(P.comp, "PoseableMeshComponent", "SetBoneTransformByName", 3, names, vals, sizes, NULL, 0);
-        }
-    if (P.applied++ % 200 == 0) a->log("P applied blob #%d (%d bones)", P.applied, n);
+    I.have_pose = 1;
+    if (P.applied++ % 200 == 0) a->log("P received pose #%d (%d bones, interval %.0f ms)", P.applied, n, I.dt);
+}
+
+/* called every frame: move the displayed pose a step towards the newest one */
+static void interp_apply(CoreAPI *a)
+{
+    if (!I.have_pose || P.away || !P.comp) return;
+    double t0 = now_ms();
+    double alpha = (t0 - I.t0) / (I.dt > 0 ? I.dt : 50.0); if (alpha > 1) alpha = 1; if (alpha < 0) alpha = 0;
+    I.frame++;
+    if (I.stride == 2 && (I.frame & 1) && alpha < 1) return;         /* over budget: every second frame (the last step of an interval is always applied) */
+    uint8_t space = P.mode == 2 ? 0 : 1; int applied = 0;
+    for (int i = 0; i < P.nb && i < MAXB; i++) {
+        if (!I.active[i]) continue;
+        double q[4], dot = 0;
+        for (int c = 0; c < 4; c++) dot += I.prev[i].q[c] * I.tgt[i].q[c];
+        double sg = dot < 0 ? -1.0 : 1.0, nn = 0;                       /* shortest path */
+        for (int c = 0; c < 4; c++) { q[c] = I.prev[i].q[c] * (1 - alpha) + sg * I.tgt[i].q[c] * alpha; nn += q[c] * q[c]; }
+        nn = sqrt(nn); if (nn < 1e-9) { q[0] = q[1] = q[2] = 0; q[3] = 1; nn = 1; }
+        Transform tr; memset(&tr, 0, sizeof tr);
+        for (int c = 0; c < 4; c++) tr.q[c] = q[c] / nn;
+        for (int c = 0; c < 3; c++) tr.t[c] = I.prev[i].t[c] * (1 - alpha) + I.tgt[i].t[c] * alpha;
+        tr.s[0] = tr.s[1] = tr.s[2] = 1;
+        const char *names[3] = { "BoneName", "InTransform", "BoneSpace" }; const void *vals[3] = { P.fnm[i], &tr, &space }; int sizes[3] = { -2, (int)sizeof tr, 1 };
+        a->call_fn(P.comp, "PoseableMeshComponent", "SetBoneTransformByName", 3, names, vals, sizes, NULL, 0);
+        memcpy(I.cur[i].q, tr.q, sizeof tr.q); memcpy(I.cur[i].t, tr.t, sizeof tr.t);
+        applied++;
+        if (alpha >= 1) I.active[i] = 0;                               /* arrived */
+    }
+    double ms = now_ms() - t0;
+    I.cost = I.cost > 0 ? I.cost * 0.95 + ms * 0.05 : ms;
+    I.stride = I.cost > 1.8 ? 2 : 1;
+    if (applied && ++I.log_n % 600 == 0) a->log("P smooth: %d bones this frame, %.2f ms (avg %.2f ms), interval %.0f ms, stride %d", applied, ms, I.cost, I.dt, I.stride);
 }
 
 __declspec(dllexport) void mod_update(CoreAPI *a)
@@ -424,6 +470,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     }
     { int vv = variant_of_seat(); if (vv == 1 || vv == 3 || vv == 4) return; }    /* minimal / asset / attach variants: no bones are applied */
     if (a->remote_blob_seq != P.last_seq) { P.last_seq = a->remote_blob_seq; apply_blob(a); }
+    interp_apply(a);                                       /* every frame: a step towards the newest pose */
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID x) { (void)h; (void)r; (void)x; return TRUE; }
