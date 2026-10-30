@@ -21,7 +21,7 @@ typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1
 static struct {
     uint8_t *hmesh; int nb; char names[MAXB][64]; uint8_t fnm[MAXB][8]; int parent[MAXB]; int frame;
     uint8_t *comp, *comp_puppet, *pclass; unsigned long last_try, last_chk, last_vis;
-    int last_seq, off, failed, applied, nohide, nocomp; unsigned long last_opt;
+    int last_seq, off, failed, applied, nohide, nocomp, away; unsigned long last_opt;
     int mode;                      /* build\pose_mode.txt: 0 component space both ways, 1 sender parent-bone space + applied as component, 2 parent-bone space + applied as world */
     int16_t last[MAXB][9];         /* what was applied last (rotation, location, scale), to skip unchanged bones */
     unsigned long last_count; int diag, diag2, nbad;
@@ -396,6 +396,17 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
         }
     }
     if (P.off || P.nocomp || P.failed > 3 || !a->have_remote || !a->puppet || !a->puppet_mesh) return;
+    {   /* the friend sends nothing in the main menu or while loading: hide the puppet then (it would hang frozen, maybe mid-jump), and until the first pose has arrived */
+        static int last_seen = -1; static unsigned long seen_t;
+        if (a->remote_blob_seq != last_seen) { last_seen = a->remote_blob_seq; seen_t = now; }
+        int away = a->remote_blob_seq == 0 || now - seen_t > 1500;
+        if (away != P.away) {
+            P.away = away;
+            uint8_t hid = (uint8_t)away; const char *n1[1] = { "bNewHidden" }; const void *v1[1] = { &hid }; int s1[1] = { 1 };
+            a->call_fn(a->puppet, "Actor", "SetActorHiddenInGame", 1, n1, v1, s1, NULL, 0);
+            a->log("P puppet %s (friend %s)", away ? "hidden" : "shown", away ? "sends no poses: menu, loading or not here yet" : "is back");
+        }
+    }
     if (!ensure_comp(a)) return;
     if (now - P.last_vis > 1000) { P.last_vis = now; if (!P.nohide) set_visible(a, a->puppet_mesh, 0); }   /* keep the clip-driven mesh hidden */
     if (now - P.last_opt > 3000) { P.last_opt = now; tickopt_probe(a); }                                      /* the optimizer may register the puppet again (level change, re-creation) */

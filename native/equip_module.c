@@ -20,7 +20,7 @@ static struct {
     uint8_t *puppet;
     struct { char key[300]; uint8_t *actor; int arrows; } pv[MAXV];
     unsigned long last_scan, last_try, last_arrows;
-    int last_weapon, gen, off; unsigned long last_off;
+    int last_weapon, gen, off; unsigned long last_off, last_hide;
     struct { char key[300]; int n; } fail[8]; int nfail;            /* visuals whose spawn failed (a half-built actor stays in the world each time) */
     char local[900];
     char seen[16][300]; int nseen;
@@ -144,6 +144,20 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (a->attach_gen != E.gen) {                           /* equipment now belongs on another mesh (bone-driven puppet on/off): attach everything again */
         E.gen = a->attach_gen;
         for (int i = 0; i < MAXV; i++) { if (E.pv[i].actor && a->obj_alive(E.pv[i].actor, NULL)) a->destroy_actor(E.pv[i].actor); E.pv[i].actor = NULL; E.pv[i].key[0] = 0; }
+    }
+
+    {   /* hide the puppet's items while the friend sends no poses (main menu, loading), the same rule as the pose module uses for the puppet */
+        static int last_seen = -1; static unsigned long seen_t; static int hidden_state = -1;
+        if (a->remote_blob_seq != last_seen) { last_seen = a->remote_blob_seq; seen_t = now; }
+        int away = a->remote_blob_seq == 0 || now - seen_t > 1500;
+        if (away != hidden_state || (away && now - E.last_hide > 2000)) {         /* also re-apply while away: items may be spawned meanwhile */
+            hidden_state = away; E.last_hide = now;
+            for (int i = 0; i < MAXV; i++) {
+                if (!E.pv[i].actor || !a->obj_alive(E.pv[i].actor, NULL)) continue;
+                uint8_t hid = (uint8_t)away; const char *n1[1] = { "bNewHidden" }; const void *v1[1] = { &hid }; int s1[1] = { 1 };
+                a->call_fn(E.pv[i].actor, "Actor", "SetActorHiddenInGame", 1, n1, v1, s1, NULL, 0);
+            }
+        }
     }
 
     const char *ex = a->remote_extra ? a->remote_extra : "-";
