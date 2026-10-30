@@ -203,7 +203,7 @@ static int variant_of_seat(void)                              /* 0 full, 1 minim
         char line[200] = ""; if (fgets(line, sizeof line, f)) {
             char key[24]; snprintf(key, sizeof key, "seat%d=", my_seat_no());
             char *p = strstr(line, key);
-            if (p) { p += strlen(key); if (!strncmp(p, "minimal", 7)) v = 1; else if (!strncmp(p, "noextra", 7)) v = 2; }
+            if (p) { p += strlen(key); if (!strncmp(p, "minimal", 7)) v = 1; else if (!strncmp(p, "noextra", 7)) v = 2; else if (!strncmp(p, "asset", 5)) v = 3; else if (!strncmp(p, "attach", 6)) v = 4; }
         }
         fclose(f);
     }
@@ -236,10 +236,20 @@ static int ensure_comp(CoreAPI *a)
     uint8_t reinit = 1;
     const char *n2[2] = { "NewMesh", "bReinitPose" }; const void *v2[2] = { &asset, &reinit }; int s2[2] = { 8, 1 };
     a->call_fn(comp, "SkinnedMeshComponent", "SetSkinnedAssetAndUpdate", 2, n2, v2, s2, NULL, 0);
+    if (variant == 3) {                                     /* asset: component + mesh, no attach, no collision/LOD calls, no bones */
+        P.comp = comp; P.comp_puppet = a->puppet;
+        a->log("P variant ASSET (seat %d): poseable component %p has the hero mesh, not attached", my_seat_no(), comp);
+        return 1;
+    }
     uint8_t snap = 2, weld = 0; uint8_t *par = a->puppet_mesh;
     const char *n3[6] = { "Parent", "SocketName", "LocationRule", "RotationRule", "ScaleRule", "bWeldSimulatedBodies" };
     const void *v3[6] = { &par, "None", &snap, &snap, &snap, &weld }; int s3[6] = { 8, -1, 1, 1, 1, 1 };
     a->call_fn(comp, "SceneComponent", "K2_AttachToComponent", 6, n3, v3, s3, NULL, 0);
+    if (variant == 4) {                                     /* attach: component + mesh + attached to the puppet mesh, still no bones */
+        P.comp = comp; P.comp_puppet = a->puppet;
+        a->log("P variant ATTACH (seat %d): poseable component %p has the mesh and is attached, no bones applied", my_seat_no(), comp);
+        return 1;
+    }
     if (variant != 2) {   /* no collision at all on the puppet mesh: the local hero's sword must not be able to hit it */
         uint8_t none = 0, ignore = 0;
         call1(a, comp, "PrimitiveComponent", "SetCollisionEnabled", "NewType", &none, 1, NULL, 0);
@@ -350,7 +360,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (P.off || P.nocomp || P.failed > 3 || !a->have_remote || !a->puppet || !a->puppet_mesh) return;
     if (!ensure_comp(a)) return;
     if (now - P.last_vis > 1000) { P.last_vis = now; if (!P.nohide) set_visible(a, a->puppet_mesh, 0); }   /* keep the clip-driven mesh hidden */
-    if (variant_of_seat() == 1) return;                     /* minimal variant: no bones are applied */
+    { int vv = variant_of_seat(); if (vv == 1 || vv == 3 || vv == 4) return; }    /* minimal / asset / attach variants: no bones are applied */
     if (a->remote_blob_seq != P.last_seq) { P.last_seq = a->remote_blob_seq; apply_blob(a); }
 }
 
