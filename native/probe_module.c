@@ -452,7 +452,7 @@ static void poll(void)
 /* ---- autoload: press "Continue" in the main menu by itself, so a restarted copy is back in its save without a click.
  * On when build\autoload.txt exists. Optional lines in it:  "gap=25"  seconds added per Couchlink seat (the second copy waits longer, two loads at once
  * would fill the GPU); "wait=6"  seconds the menu must have been up. The game's own MainMenuWidget::OnContinueClicked is called (it loads the newest save). ---- */
-static struct { uint8_t *menu; unsigned long seen_t, last_try, scan_t; int tries; int reported_disabled; } AL;
+static struct { uint8_t *menu; unsigned long seen_t, last_try, scan_t; int tries; int reported_disabled; unsigned long hero_t; int keys; } AL;
 static int al_seat(void) { static int s = -2; if (s == -2) { const char *c = strstr(GetCommandLineA(), "-CoopSeat="); s = c ? atoi(c + 10) : 0; } return s; }
 static ULONGLONG proc_start_ft(void) { FILETIME c, e, k, u; if (!GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) return 0; return ((ULONGLONG)c.dwHighDateTime << 32) | c.dwLowDateTime; }
 static double proc_age_s(void) { FILETIME now; GetSystemTimeAsFileTime(&now); ULONGLONG n = ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime; ULONGLONG s = proc_start_ft(); return s ? (double)(n - s) / 1e7 : 0; }
@@ -471,6 +471,14 @@ static void al_mark_done(void)
     char p[MAX_PATH]; snprintf(p, sizeof p, "%s\\autoload_done_%d.txt", g_dir, al_seat());
     FILE *f = fopen(p, "w"); if (f) { fputs("done\n", f); fclose(f); }
 }
+static BOOL CALLBACK al_find_wnd(HWND h, LPARAM l) { DWORD pid = 0; GetWindowThreadProcessId(h, &pid); if (pid == GetCurrentProcessId() && IsWindowVisible(h) && !GetWindow(h, GW_OWNER)) { *(HWND *)l = h; return FALSE; } return TRUE; }
+/* after the save is loaded the game waits for "press any key" on its loading screen: post a key nobody uses (F13) to the game window, which works without focus */
+static void al_press_any_key(void)
+{
+    HWND w = NULL; EnumWindows(al_find_wnd, (LPARAM)&w); if (!w) return;
+    PostMessageA(w, WM_KEYDOWN, VK_F13, 0x00010001); PostMessageA(w, WM_KEYUP, VK_F13, 0xC0010001);
+    if (!AL.keys++) A->log("PR autoload: sending a key to pass the 'press any key' loading screen");
+}
 static void autoload_tick(void)
 {
     static unsigned long t; unsigned long now = GetTickCount();
@@ -480,7 +488,12 @@ static void autoload_tick(void)
     int gap = 60; double wait = 2; char line[100];                                 /* gap: how long a later seat waits for the previous one at most */
     while (fgets(line, sizeof line, f)) { if (!strncmp(line, "gap=", 4)) gap = atoi(line + 4); else if (!strncmp(line, "wait=", 5)) wait = atof(line + 5); }
     fclose(f);
-    if (A->hero) { AL.tries = 0; AL.seen_t = 0; al_mark_done(); return; }  /* already in a save (and tell the next seat) */
+    if (A->hero) {                                                           /* already in a save (and tell the next seat) */
+        if (!AL.hero_t) AL.hero_t = now;
+        if (AL.tries && now - AL.hero_t < 20000) al_press_any_key();         /* we loaded it ourselves: the loading screen still waits for a key */
+        AL.seen_t = 0; al_mark_done(); return;
+    }
+    if (AL.tries && AL.tries < 99 && now - AL.last_try > 4000 && now - AL.last_try < 150000) al_press_any_key();   /* the loading screen can show before the hero exists */
     if (AL.menu && !live(AL.menu)) AL.menu = NULL;
     if (!AL.menu) {
         if (now - AL.scan_t < 2000) return; AL.scan_t = now;
