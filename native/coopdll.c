@@ -297,6 +297,7 @@ static DWORD WINAPI worker(LPVOID arg)
     analyze_gameengine();
     {   char sp[MAX_PATH]; snprintf(sp, sizeof sp, "%s\\scan.txt", g_dir); if (GetFileAttributesA(sp) != INVALID_FILE_ATTRIBUTES) { scan_anims(); return 0; } }
     for (int attempt = 0; attempt < 90 && !g_orig_tick; attempt++) {     /* the GameEngine object exists a little after the object array */
+        g_num_elements = rd32(arr + 0x10 + 0x14);                       /* injected early: the object array keeps growing, a stale count never shows the GameEngine */
         install_tick_hook();
         if (!g_orig_tick) Sleep(1000);
     }
