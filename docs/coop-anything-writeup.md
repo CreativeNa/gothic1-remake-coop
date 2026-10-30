@@ -4,7 +4,7 @@
 |---|---|
 | Engine | Unreal Engine 5.4.3, Hazelight AngelScript |
 | Versions tested | Steam build with `G1R-Win64-Shipping.exe` of 171704320 bytes |
-| Projects | this repository (private prototype) |
+| Projects | this repository (public prototype, MIT) |
 | QA level | none (manual testing by the author on two windows of one PC) |
 | Last updated | 2026-10-30 |
 
@@ -45,7 +45,7 @@ Manual only. No automated suite yet.
 
 ## How to play
 
-Not yet possible between different PCs. For local testing see "Build and test" in the README.
+Direct connect by IP exists (`tools/join.ps1`) but has not been tested between two PCs yet. For local testing and the join steps see "Build and test" in the README.
 
 ## Known issues
 

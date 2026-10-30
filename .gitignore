@@ -27,3 +27,5 @@ scan.txt
 # Local screenshots and scratch
 *.png
 *.webp
+!docs/img/*.png
+!docs/img/*.webp

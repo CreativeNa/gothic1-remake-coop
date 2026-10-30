@@ -22,13 +22,13 @@ Last updated: 2026-10-30
 
 ## Not started
 
-- Transport between different PCs (direct UDP by IP, Steam relay) and bone-pose compression for the internet.
+- Real two-PC test of the direct-IP transport (`tools/join.ps1` exists, verified on loopback only), Steam relay, and bone-pose compression for the internet.
 - Shared world: NPC positions and health, shared combat, quests, dialogue, inventory, saves.
 - Robustness: hero respawn on level change, late join.
 - Game updates: every update changes the RVAs and needs a new recon pass.
 
 ## Next steps
 
-1. Direct IP transport and pose compression, so two PCs can meet.
+1. Test direct IP between two PCs, then pose compression.
 2. Puppet polish (face, arrows, more food items).
 3. NPC / enemy mirroring for shared fights.
