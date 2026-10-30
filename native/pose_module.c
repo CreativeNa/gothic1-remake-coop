@@ -300,7 +300,7 @@ static int ensure_comp(CoreAPI *a)
     int lod0 = 1;                                           /* forced LOD 0 (1-based): distant LODs drop bones and the skin then stretches */
     if (variant != 2) call1(a, comp, "SkinnedMeshComponent", "SetForcedLOD", "InNewForcedLOD", &lod0, 4, NULL, 0);
     if (variant == 2) a->log("P variant NOEXTRA (seat %d): mesh + attach only, no collision calls, no forced LOD", my_seat_no());
-    set_visible(a, comp, 1);
+    set_visible(a, comp, P.away ? 0 : 1);                   /* a new component starts hidden if the friend is not sending poses */
     if (!P.nohide) set_visible(a, a->puppet_mesh, 0);
     P.comp = comp; P.comp_puppet = a->puppet; P.last_seq = 0; P.applied = 0;
     a->set_attach_target(comp);
@@ -405,8 +405,8 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
         int away = a->remote_blob_seq == 0 || now - seen_t > 1500;
         if (away != P.away) {
             P.away = away;
-            uint8_t hid = (uint8_t)away; const char *n1[1] = { "bNewHidden" }; const void *v1[1] = { &hid }; int s1[1] = { 1 };
-            a->call_fn(a->puppet, "Actor", "SetActorHiddenInGame", 1, n1, v1, s1, NULL, 0);
+            /* the core un-hides the puppet ACTOR on every tick (old guard against the game hiding spawned characters), so hide the poseable COMPONENT instead */
+            if (P.comp && P.comp_puppet == a->puppet && a->obj_alive(P.comp, NULL)) set_visible(a, P.comp, !away);
             a->log("P puppet %s (friend %s)", away ? "hidden" : "shown", away ? "sends no poses: menu, loading or not here yet" : "is back");
         }
     }
