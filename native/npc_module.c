@@ -26,7 +26,7 @@ typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_
 #pragma pack(pop)
 
 typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1; } Transform;   /* FTransform: FQuat, translation, scale */
-typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12]; int have, dirty; unsigned long t; } GPose;   /* guest: bone-driven copy of one NPC */
+typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12]; int have, dirty; unsigned long t, topt; } GPose;   /* guest: bone-driven copy of one NPC */
 typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
 typedef struct { uint8_t *actor; uint32_t id; } Known;
 typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
@@ -256,6 +256,26 @@ static void set_anim(CoreAPI *a, Mirror *m)
 }
 
 
+/* The game's BFGTickOptimizerSystem crashed (null read at exe+0x363dfff, address 0xd50) with a bone-driven puppet; the same would happen with a bone-driven NPC:
+ * opt the actor out of the optimizer before a poseable component is added to it, and again every few seconds. */
+static void tickopt_off(CoreAPI *a, uint8_t *actor)
+{
+    static uint8_t *sys; static unsigned long t_find;
+    if (sys && !a->obj_alive(sys, NULL)) sys = NULL;
+    if (!sys && GetTickCount() - t_find > 3000) {
+        t_find = GetTickCount(); char nm[160], cn[96]; int n = a->num_objects();
+        for (int i = 0; i < n && !sys; i++) {
+            uint8_t *o = a->object_at(i); if (!o) continue;
+            a->obj_name(a->obj_class(o), cn, sizeof cn); if (strcmp(cn, "BFGTickOptimizerSystem") != 0) continue;
+            a->obj_name(o, nm, sizeof nm); if (strncmp(nm, "Default__", 9) != 0) sys = o;
+        }
+    }
+    if (!sys) return;
+    uint8_t off = 0; uint8_t *act = actor;
+    const char *names[2] = { "Actor", "OptimizationEnabled" }; const void *vals[2] = { &act, &off }; int sizes[2] = { 8, 1 };
+    a->call_fn(sys, "BFGTickOptimizerSystem", "SetTickOptimizationRuntime_Enabled", 2, names, vals, sizes, NULL, 0);
+}
+
 /* ---- guest: bone-driven NPC (a PoseableMeshComponent with the NPC's own mesh asset, the original mesh hidden) ---- */
 static void gp_drop(CoreAPI *a, Mirror *m)
 {
@@ -271,6 +291,7 @@ static int gp_ensure(CoreAPI *a, Mirror *m, GPose *g)
     if (g->comp && g->mesh == mesh && a->obj_alive(g->comp, NULL)) return 1;
     static uint8_t *pclass; if (!pclass) pclass = a->find_object("Class", "PoseableMeshComponent", "/Script/Engine");
     if (!pclass) return 0;
+    tickopt_off(a, m->actor);
     Transform id; memset(&id, 0, sizeof id); id.q[3] = 1; id.s[0] = id.s[1] = id.s[2] = 1;
     uint8_t manual = 1, defer = 0; uint8_t *comp = NULL;
     const char *names[4] = { "Class", "bManualAttachment", "RelativeTransform", "bDeferredFinish" };
@@ -378,7 +399,7 @@ static void guest_tick(CoreAPI *a, unsigned long now)
         if (!m->frozen) continue;
         if (m->gp) {
             if (now - m->gp->t > 3000) { gp_drop(a, m); set_anim(a, m); }          /* no longer one of the host's focus NPCs: the original mesh and its animation come back */
-            else gp_apply(a, m);
+            else { if (now - m->gp->topt > 3000) { m->gp->topt = now; tickopt_off(a, m->actor); } gp_apply(a, m); }
         }
         if (now - m->last_seen > 5000) { release(a, m); continue; }              /* the host no longer reports it (far away): give the AI back */
         double want[3] = { m->want.x, m->want.y, m->want.z };
