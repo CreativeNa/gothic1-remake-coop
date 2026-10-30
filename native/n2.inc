@@ -916,6 +916,13 @@ static void frame_work(void)
         break;
     }
     case 2: {   /* spawn a StaticMeshActor next to the hero */
+        {   /* debug switch: no puppet at all (so no pose / equip / anim modules either); the network and the reads of the local hero keep running */
+            char pp[MAX_PATH]; snprintf(pp, sizeof pp, "%s\\puppet_off.txt", g_dir);
+            if (GetFileAttributesA(pp) != INVALID_FILE_ATTRIBUTES) {
+                logf_("N2: puppet_off.txt present: no puppet is created (network and hero reads still run)");
+                T.marker = NULL; T.step = 4; T.frame = 0; break;
+            }
+        }
         if (!(T.begin_spawn.fn && T.finish_spawn.fn && T.gs_cdo && T.smactor_class)) { logf_("N2: spawn pieces missing"); T.step = 99; break; }
         double h[3]; read_hero_pos(h);
         Transform tr; memset(&tr, 0, sizeof tr);

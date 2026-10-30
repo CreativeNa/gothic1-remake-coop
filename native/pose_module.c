@@ -269,7 +269,13 @@ static void apply_blob(CoreAPI *a)
 __declspec(dllexport) void mod_update(CoreAPI *a)
 {
     unsigned long now = GetTickCount();
-    if (a->hero) send_pose(a);
+    static int nosend; static unsigned long nosend_t;
+    if (now - nosend_t > 1000) {                           /* build\pose_nosend.txt: do not read the hero's bones at all (bisecting a crash after sword swings) */
+        nosend_t = now;
+        int v = GetFileAttributesA("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_nosend.txt") != INVALID_FILE_ATTRIBUTES;
+        if (v != nosend) { nosend = v; a->log("P sending of bone poses %s", v ? "OFF (pose_nosend.txt)" : "ON"); }
+    }
+    if (a->hero && !nosend) send_pose(a);
 
     if (now - P.last_chk > 1000) {
         P.last_chk = now;
