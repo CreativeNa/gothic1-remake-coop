@@ -23,7 +23,7 @@ typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_
 #pragma pack(pop)
 
 typedef struct { uint8_t *actor; uint32_t id; } Known;
-typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[96]; } Mirror;
+typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; } Mirror;
 
 static struct {
     Known known[2048]; int nknown; unsigned long last_scan, last_send, last_stat;
@@ -121,7 +121,7 @@ static void host_tick(CoreAPI *a, unsigned long now)
     double c1[3], c2[3]; int have2 = a->puppet && loc_of(a, a->puppet, c2);
     if (!loc_of(a, a->hero, c1)) return;
     static uint8_t buf[9000]; int cnt = 0, nstr = 0, strpos = 0;
-    static char strs[40][200]; static char strtab[3000];
+    static char strs[40][320]; static char strtab[6000];
     static Rec recs[MAXN];
     for (int i = 0; i < N.nknown && cnt < MAXN; i++) {
         uint8_t *o = N.known[i].actor; if (!a->obj_alive(o, NULL)) continue;
@@ -135,9 +135,9 @@ static void host_tick(CoreAPI *a, unsigned long now)
         char cn[120], cp[200];
         if (clip_of(a, o, cn, sizeof cn, cp, sizeof cp)) {
             { static char lastc[8][120]; static int nl; int seen = 0; for (int q = 0; q < nl; q++) if (!strcmp(lastc[q], cn)) seen = 1; if (!seen && nl < 8) { snprintf(lastc[nl++], 120, "%s", cn); a->log("N host: NPC clip %s (%s)", cn, cp); } }
-            char both[300]; snprintf(both, sizeof both, "%s|%s", cn, cp);
+            char both[320]; snprintf(both, sizeof both, "%s|%s", cn, cp);
             int k = -1; for (int j = 0; j < nstr; j++) if (strcmp(strs[j], both) == 0) k = j;
-            if (k < 0 && nstr < 40 && strpos + (int)strlen(both) + 1 < (int)sizeof strtab) { k = nstr; snprintf(strs[nstr++], 200, "%s", both); memcpy(strtab + strpos, both, strlen(both) + 1); strpos += (int)strlen(both) + 1; }
+            if (k < 0 && nstr < 40 && strpos + (int)strlen(both) + 1 < (int)sizeof strtab) { k = nstr; snprintf(strs[nstr++], 320, "%s", both); memcpy(strtab + strpos, both, strlen(both) + 1); strpos += (int)strlen(both) + 1; }
             if (k >= 0) r.anim = (uint16_t)(k + 1);
         }
         recs[cnt++] = r;
@@ -169,7 +169,7 @@ static void set_anim(CoreAPI *a, Mirror *m)
         a->call_fn(mesh, "SkeletalMeshComponent", "SetAnimationMode", 1, n, v, s, NULL, 0);
         return;
     }
-    char nm[100], pk[200] = "-"; snprintf(nm, sizeof nm, "%s", m->anim);
+    char nm[320], pk[320] = "-"; snprintf(nm, sizeof nm, "%s", m->anim);
     char *bar = strchr(nm, '|'); if (bar) { *bar = 0; snprintf(pk, sizeof pk, "%s", bar + 1); }
     uint8_t *seq = a->clip_by_name(nm, pk);
     if (!seq) { a->log("N guest: clip %s not found (pkg %s)", nm, pk); return; }
