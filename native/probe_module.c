@@ -263,6 +263,47 @@ static void run_command(char *line)
         }
         return;
     }
+    if (!strcmp(c, "npchp") && nt >= 3) {                              /* npchp <npc ptr> <health>: set the Health attribute (base and current) of an NPC; finds its AttributeSet_Health by outer */
+        uint8_t *npc = ptr_of(tok[1]); float val = (float)atof(tok[2]); int n = A->num_objects(), done = 0; char cn[96];
+        if (!live(npc)) { P("%s is not a live game object", tok[1]); return; }
+        uint8_t *pst = NULL; { int ops = A->find_prop_offset(A->obj_class(npc), "PlayerState"); if (ops >= 0) A->read_mem(npc + ops, &pst, 8); }   /* an NPC's attribute sets belong to its PlayerState */
+        for (int i = 0; i < n; i++) {
+            uint8_t *o = A->object_at(i); if (!o) continue;
+            A->obj_name(A->obj_class(o), cn, sizeof cn); if (strcmp(cn, "AttributeSet_Health") != 0) continue;
+            uint8_t *outer = NULL; A->read_mem(o + 0x20, &outer, 8); if (!outer) continue;
+            uint8_t *outer2 = NULL; A->read_mem(outer + 0x20, &outer2, 8);
+            if (outer != npc && outer2 != npc && !(pst && outer == pst)) continue;
+            float before = 0; A->read_mem(o + 64 + 12, &before, 4);
+            A->write_mem(o + 64 + 8, &val, 4); A->write_mem(o + 64 + 12, &val, 4);
+            P("health set %p: %.1f -> %.1f", o, before, val); done++;
+        }
+        if (!done) P("no AttributeSet_Health belongs to that NPC");
+        return;
+    }
+    if (!strcmp(c, "tp") && nt >= 5) {                                  /* tp <ptr> x y z: move an actor (teleport) */
+        uint8_t *o = ptr_of(tok[1]); if (!live(o)) { P("%s is not a live game object", tok[1]); return; }
+        double v[3] = { atof(tok[2]), atof(tok[3]), atof(tok[4]) }; uint8_t sw = 0, tpf = 1;
+        const char *nl[3] = { "NewLocation", "bSweep", "bTeleport" }; const void *vl[3] = { v, &sw, &tpf }; int sl[3] = { 24, 1, 1 };
+        P("tp ran: %d", A->call_fn(o, "Actor", "K2_SetActorLocation", 3, nl, vl, sl, NULL, 0)); return;
+    }
+    if (!strcmp(c, "tpto") && nt >= 3) {                                 /* tpto <ptr> <target ptr> [dx dy dz]: teleport an actor next to another one */
+        uint8_t *o = ptr_of(tok[1]), *t = ptr_of(tok[2]); if (!live(o) || !live(t)) { P("not live objects"); return; }
+        double l[3] = { 0, 0, 0 }; if (!A->call_fn(t, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, l, 24)) { P("no location"); return; }
+        double v[3] = { l[0] + (nt > 3 ? atof(tok[3]) : 150), l[1] + (nt > 4 ? atof(tok[4]) : 0), l[2] + (nt > 5 ? atof(tok[5]) : 20) }; uint8_t sw = 0, tpf = 1;
+        const char *nl[3] = { "NewLocation", "bSweep", "bTeleport" }; const void *vl[3] = { v, &sw, &tpf }; int sl[3] = { 24, 1, 1 };
+        P("tpto ran: %d (target at %.0f %.0f %.0f)", A->call_fn(o, "Actor", "K2_SetActorLocation", 3, nl, vl, sl, NULL, 0), l[0], l[1], l[2]); return;
+    }
+    if (!strcmp(c, "lookat") && nt >= 2) {                               /* lookat <target ptr>: turn the hero's camera (control rotation) towards an actor */
+        uint8_t *t = ptr_of(tok[1]); if (!A->hero || !live(t)) { P("not live objects"); return; }
+        double hl[3] = { 0 }, tl[3] = { 0 };
+        A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hl, 24); A->call_fn(t, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, tl, 24);
+        double dx = tl[0] - hl[0], dy = tl[1] - hl[1], dz = tl[2] - hl[2], hz = sqrt(dx * dx + dy * dy);
+        double rot[3] = { -atan2(dz, hz) * 57.29578 - 5.0, atan2(dy, dx) * 57.29578 + (nt > 2 ? atof(tok[2]) : 0), 0 };      /* pitch, yaw, roll */
+        int oc = A->find_prop_offset(A->obj_class(A->hero), "Controller"); uint8_t *ctl = NULL; if (oc >= 0) A->read_mem(A->hero + oc, &ctl, 8);
+        if (!ctl) { P("no controller"); return; }
+        const char *n[1] = { "NewRotation" }; const void *v[1] = { rot }; int sz[1] = { 24 };
+        P("lookat ran: %d (yaw %.0f pitch %.0f)", A->call_fn(ctl, "Controller", "SetControlRotation", 1, n, v, sz, NULL, 0), rot[1], rot[0]); return;
+    }
     if (!strcmp(c, "npcs")) {                                           /* characters in the world with their class chain and distance to the hero */
         double rad = nt > 1 ? atof(tok[1]) : 3000, hp[3] = {0,0,0}; int max = nt > 2 ? atoi(tok[2]) : 20, shown = 0, total = 0;
         if (A->hero) A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hp, 24);
