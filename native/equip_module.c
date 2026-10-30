@@ -27,6 +27,14 @@ static struct {
     struct { uint8_t *cls; int v; int off_owner; } cc[512]; int ncc;
 } E;
 
+/* "package,class,socket[,arrows]" -> "package,class,socket" */
+static void entry_key(const char *ent, char *key, size_t cap)
+{
+    snprintf(key, cap, "%s", ent);
+    int commas = 0;
+    for (char *p = key; *p; p++) if (*p == ',' && ++commas == 3) { *p = 0; break; }
+}
+
 __declspec(dllexport) void mod_init(CoreAPI *a) { (void)a; memset(&E, 0, sizeof E); }
 __declspec(dllexport) void mod_shutdown(CoreAPI *a) { for (int i = 0; i < MAXV; i++) if (E.pv[i].actor) a->destroy_actor(E.pv[i].actor); }
 
@@ -146,6 +154,27 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     /* parse the remote entries */
     char ents[MAXV][600]; int ne = 0;
     for (char *tok = strtok(list, "&"); tok && ne < MAXV; tok = strtok(NULL, "&")) snprintf(ents[ne++], 600, "%s", tok);
+
+    /* a visual that only moved to another socket (the sword: hand <-> holder) is re-attached, never destroyed and created again:
+     * destroying/spawning owner-less item visuals is what crashed the game (access violation at 0xd50) after every draw/sheathe */
+    for (int k = 0; k < ne; k++) {
+        char key[600]; entry_key(ents[k], key, sizeof key);
+        int exact = 0;
+        for (int i = 0; i < MAXV; i++) if (E.pv[i].actor && strcmp(E.pv[i].key, key) == 0) exact = 1;
+        if (exact) continue;
+        char pre[600]; snprintf(pre, sizeof pre, "%s", key); { char *last = strrchr(pre, ','); if (last) last[1] = 0; }   /* "package,class," */
+        const char *sock = strrchr(key, ','); sock = sock ? sock + 1 : "None";
+        for (int i = 0; i < MAXV; i++) {
+            if (!E.pv[i].actor || strncmp(E.pv[i].key, pre, strlen(pre)) != 0 || !a->obj_alive(E.pv[i].actor, NULL)) continue;
+            int wanted = 0;                                   /* is this visual's current socket still wanted by another entry? */
+            for (int j = 0; j < ne; j++) { char kj[600]; entry_key(ents[j], kj, sizeof kj); if (strcmp(kj, E.pv[i].key) == 0) wanted = 1; }
+            if (wanted) continue;
+            int ok = a->attach_to_puppet(E.pv[i].actor, sock);
+            a->log("E re-attach %s: '%s' -> '%s' ok=%d", E.pv[i].key, E.pv[i].key, sock, ok);
+            snprintf(E.pv[i].key, sizeof E.pv[i].key, "%s", key);
+            break;
+        }
+    }
 
     /* remove puppet visuals that the other player no longer has */
     for (int i = 0; i < MAXV; i++) {

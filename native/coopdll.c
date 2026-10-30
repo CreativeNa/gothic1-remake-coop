@@ -190,7 +190,35 @@ static char g_dir[MAX_PATH];
 #include "scan.inc"
 #include "n2.inc"
 
-
+/* ---- crash recorder: every access violation anywhere in the process is logged with module+offset and the callers found on the stack.
+ * Guarded ones (our own __try, probes) show up too, so the LAST "AV" line before the game dies is the fatal one. ---- */
+static void where_(const void *addr, char *out, int cap)
+{
+    HMODULE h = NULL; char fn[MAX_PATH];
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)addr, &h) && h && GetModuleFileNameA(h, fn, sizeof fn)) {
+        const char *b = strrchr(fn, '\\'); b = b ? b + 1 : fn;
+        snprintf(out, (size_t)cap, "%s+0x%llx", b, (unsigned long long)((const uint8_t *)addr - (const uint8_t *)h));
+    } else snprintf(out, (size_t)cap, "%p", addr);
+}
+static LONG CALLBACK av_recorder(EXCEPTION_POINTERS *ep)
+{
+    static volatile LONG count;
+    if (ep->ExceptionRecord->ExceptionCode != 0xC0000005 || InterlockedIncrement(&count) > 200) return EXCEPTION_CONTINUE_SEARCH;
+    char w[256];
+    where_(ep->ExceptionRecord->ExceptionAddress, w, sizeof w);
+    ULONG_PTR kind = ep->ExceptionRecord->NumberParameters > 0 ? ep->ExceptionRecord->ExceptionInformation[0] : 9;
+    ULONG_PTR addr = ep->ExceptionRecord->NumberParameters > 1 ? ep->ExceptionRecord->ExceptionInformation[1] : 0;
+    logf_("AV at %s: %s address 0x%llx, thread %lu", w, kind == 0 ? "reading" : (kind == 1 ? "writing" : "executing"), (unsigned long long)addr, GetCurrentThreadId());
+    uint64_t *sp = (uint64_t *)ep->ContextRecord->Rsp; int shown = 0;
+    for (int i = 0; i < 160 && shown < 12; i++) {
+        uint64_t v = 0; if (!safe_read(sp + i, &v, 8)) break;
+        MEMORY_BASIC_INFORMATION mbi;
+        if (v < 0x10000 || !VirtualQuery((void *)v, &mbi, sizeof mbi)) continue;
+        if (!(mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) continue;
+        where_((void *)v, w, sizeof w); logf_("AV   caller candidate %s", w); shown++;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 
 static DWORD WINAPI worker(LPVOID arg)
 {
@@ -204,6 +232,7 @@ static DWORD WINAPI worker(LPVOID arg)
     strcat(path, "\\coopdll.log");
     g_log = fopen(path, "a");
     logf_("==== coopdll N1 start, pid %lu", GetCurrentProcessId());
+    AddVectoredExceptionHandler(1, av_recorder);
 
     g_base = (uint8_t *)GetModuleHandleA(NULL);
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(g_base + ((IMAGE_DOS_HEADER *)g_base)->e_lfanew);

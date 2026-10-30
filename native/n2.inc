@@ -455,6 +455,7 @@ static void dump_props_w(uint8_t *obj, const char *tag, int max)
 }
 
 /* ---- actors the modules attach to the puppet (quiver, weapons ...) ---- */
+static void destroy_actor_w(uint8_t *actor);
 static uint8_t *spawn_actor_w(uint8_t *cls)
 {
     if (!(cls && T.begin_spawn.fn && T.finish_spawn.fn && T.gs_cdo && T.hero)) return NULL;
