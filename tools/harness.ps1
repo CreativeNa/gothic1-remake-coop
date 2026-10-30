@@ -30,5 +30,11 @@ switch ($Cmd) {
         $name = if ($Arg) { $Arg } else { "shot" }
         foreach ($seat in 0, 1) { & "$c\tools\winshot.ps1" -Seat $seat -Out "$env:TEMP\g1shots\${name}_seat$seat.png" }
     }
+    "attack" {   # host hero stands in front of the NPC and hits it (synthetic mouse clicks); Arg = number of clicks
+        $n = NpcPtr 0; if (-not $n) { throw "NPC $Npc not found in the host" }
+        Probe 0 "tpto hero 0x$n 110 0 20" | Out-Null; Start-Sleep 1; Probe 0 "lookat 0x$n" | Out-Null; Start-Sleep 1
+        $k = if ($Arg) { [int]$Arg } else { 6 }
+        & "$c	ools\wininput.ps1" -Seat 0 -Click $k
+    }
     "stop" { Get-Process G1R-Win64-Shipping -ErrorAction SilentlyContinue | Stop-Process -Force }
 }
