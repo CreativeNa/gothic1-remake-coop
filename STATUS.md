@@ -18,7 +18,7 @@ Last updated: 2026-10-30
 - `SetBoneTransformByName` works only in component space; children are converted through the parent's cached pose, so fast motion can leave small errors.
 - No facial animation; dark patches on the puppet's face in some lighting.
 - FPS dips during fights (one engine call per bone).
-- Occasional crashes (access violation at `0xd50` / `0x108`) while swinging the sword and moving; no engine log is written, cause unconfirmed.
+- Crash (access violation reading `0xd50`) a few seconds after swinging the sword near the puppet. The AV recorder pins it inside the game itself: `G1R-Win64-Shipping.exe+0x363dfff` is `cmp qword ptr [rcx+0xd50], 0` at the start of a method called with `this == NULL`; no coopdll frames on the stack. Prime suspect: the local sword hits the other player's owner-less item visual or the puppet mesh. Mitigation tried: collision fully disabled on item actors and on the poseable mesh (not yet verified). Previous mitigations: no destroy/respawn of the sword visual (re-attach instead), clip layer paused while the pose module drives the puppet.
 - Equipment attachments to the puppet were once floating next to the body; re-check.
 - Arrow count on the puppet's quiver can only go down.
 

@@ -226,6 +226,18 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
             if (f >= 0 && ++E.fail[f].n >= 2) a->log("E giving up on %s (spawn keeps failing)", cls);
             continue;
         }
+        {   /* the other player's items must be invisible to hit traces: a sword swing that hits an owner-less item visual sends the game looking for its character (null) */
+            uint8_t off = 0; const char *n1[1] = { "bNewActorEnableCollision" }; const void *v1[1] = { &off }; int s1[1] = { 1 };
+            a->call_fn(actor, "Actor", "SetActorEnableCollision", 1, n1, v1, s1, NULL, 0);
+            uint8_t *root = ptr_prop(a, actor, "RootComponent");
+            if (root) {
+                uint8_t none = 0, ignore = 0;
+                const char *n2[1] = { "NewType" }; const void *v2[1] = { &none }; int s2[1] = { 1 };
+                a->call_fn(root, "PrimitiveComponent", "SetCollisionEnabled", 1, n2, v2, s2, NULL, 0);
+                const char *n3[1] = { "NewResponse" }; const void *v3[1] = { &ignore }; int s3[1] = { 1 };
+                a->call_fn(root, "PrimitiveComponent", "SetCollisionResponseToAllChannels", 1, n3, v3, s3, NULL, 0);
+            }
+        }
         int ok = a->attach_to_puppet(actor, sock);
         a->log("E attach %s to socket '%s' ok=%d", cls, sock, ok);
         E.pv[slot].actor = actor; snprintf(E.pv[slot].key, sizeof E.pv[slot].key, "%s", key); E.pv[slot].arrows = -2;

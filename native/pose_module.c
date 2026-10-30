@@ -206,6 +206,13 @@ static int ensure_comp(CoreAPI *a)
     const char *n3[6] = { "Parent", "SocketName", "LocationRule", "RotationRule", "ScaleRule", "bWeldSimulatedBodies" };
     const void *v3[6] = { &par, "None", &snap, &snap, &snap, &weld }; int s3[6] = { 8, -1, 1, 1, 1, 1 };
     a->call_fn(comp, "SceneComponent", "K2_AttachToComponent", 6, n3, v3, s3, NULL, 0);
+    {   /* no collision at all on the puppet mesh: the local hero's sword must not be able to hit it */
+        uint8_t none = 0, ignore = 0;
+        call1(a, comp, "PrimitiveComponent", "SetCollisionEnabled", "NewType", &none, 1, NULL, 0);
+        call1(a, comp, "PrimitiveComponent", "SetCollisionResponseToAllChannels", "NewResponse", &ignore, 1, NULL, 0);
+        uint8_t off = 0;
+        call1(a, comp, "PrimitiveComponent", "SetGenerateOverlapEvents", "bInGenerateOverlapEvents", &off, 1, NULL, 0);
+    }
     int lod0 = 1;                                           /* forced LOD 0 (1-based): distant LODs drop bones and the skin then stretches */
     call1(a, comp, "SkinnedMeshComponent", "SetForcedLOD", "InNewForcedLOD", &lod0, 4, NULL, 0);
     set_visible(a, comp, 1);

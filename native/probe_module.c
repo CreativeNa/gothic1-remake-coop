@@ -191,6 +191,31 @@ static void run_command(char *line)
         if (!o) P("not found"); else { char cn[96] = ""; A->obj_name(A->obj_class(o), cn, sizeof cn); P("%p %s (%s)", o, tok[2], cn); }
         return;
     }
+    if (!strcmp(c, "nativefn") && nt >= 2) {
+        /* which game functions (UFunctions with a native body) start just below the given exe offsets? e.g. nativefn 0x52b478f 0x363dfff */
+        uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+        IMAGE_NT_HEADERS *nth = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+        size_t image = nth->OptionalHeader.SizeOfImage;
+        uint8_t *ref = A->find_object("Function", "K2_GetActorLocation", "Actor");
+        int foff = -1;
+        for (int o = 0x80; ref && o < 0x140 && foff < 0; o += 8) { uint8_t *v = NULL; A->read_mem(ref + o, &v, 8); if (v >= base + 0x1000 && v < base + 0x6000000 && (size_t)(v - base) < image) foff = o; }
+        if (foff < 0) { P("could not find the Func offset in UFunction"); return; }
+        P("UFunction::Func at +0x%x", foff);
+        int n = A->num_objects(); char nm[160], cn[96], on[160];
+        for (int t = 1; t < nt; t++) {
+            uint64_t rva = strtoull(tok[t], NULL, 0); uint8_t *target = base + rva; uint8_t *best = NULL; uint8_t *bestf = NULL;
+            for (int i = 0; i < n; i++) {
+                uint8_t *o = A->object_at(i); if (!o) continue;
+                A->obj_name(A->obj_class(o), cn, sizeof cn); if (strcmp(cn, "Function") != 0) continue;
+                uint8_t *f = NULL; A->read_mem(o + foff, &f, 8);
+                if (f && f <= target && target - f < 0x4000 && (!bestf || f > bestf)) { bestf = f; best = o; }
+            }
+            if (!best) { P("  0x%llx: no UFunction native within 16 KB below", (unsigned long long)rva); continue; }
+            uint8_t *outer = NULL; A->read_mem(best + 0x20, &outer, 8); A->obj_name(best, nm, sizeof nm); A->obj_name(outer, on, sizeof on);
+            P("  0x%llx: %s::%s  (native starts at +0x%llx, %lld bytes before)", (unsigned long long)rva, on, nm, (unsigned long long)(bestf - base), (long long)(target - bestf));
+        }
+        return;
+    }
     if (!strcmp(c, "purge") && nt >= 2) {
         int max = nt > 2 ? atoi(tok[2]) : 1000, done = 0, skipped = 0, hidden = 0;
         int n = A->num_objects(); char nm[160], cn[96];

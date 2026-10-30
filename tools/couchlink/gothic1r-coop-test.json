@@ -34,9 +34,9 @@
   "registry": [],
   "locks": [],
   "input": {
-    "xinput": true,
+    "xinput": false,
     "dinput": false,
-    "rawinput": true
+    "rawinput": false
   },
   "window": {
     "borderless": true,
