@@ -105,7 +105,7 @@ static int clip_of(CoreAPI *a, uint8_t *o, char *name, int ncap, char *pkg, int 
             uint8_t *ref = NULL; a->read_mem(segs + (size_t)k * 32, &ref, 8); if (!ref || !a->obj_alive(ref, NULL)) continue;
             char tmp[120]; a->obj_name(ref, tmp, sizeof tmp);
             uint8_t *pk = NULL; a->read_mem(ref + 0x20, &pk, 8); char pn[300] = ""; if (pk) a->obj_name(pk, pn, sizeof pn);
-            if (strncmp(tmp, "GVL_", 4) == 0 || strstr(pn, "DialogFacials") || strstr(pn, "_Voicetypes")) continue;   /* voice / facial clips: not the body (FA_Man_* are fight animations, those are body clips) */
+            if (strncmp(tmp, "FA_", 3) == 0 || strncmp(tmp, "GVL_", 4) == 0 || strstr(pn, "DialogFacials") || strstr(pn, "_Voicetypes")) continue;   /* FA_* are additive fight clips (hits, attacks, defeated loops) and GVL_* voice / facial clips: played alone on the whole mesh they give a T-pose */
             snprintf(name, ncap, "%s", tmp); snprintf(pkg, pcap, "%s", pn);
             return 1;
         }
