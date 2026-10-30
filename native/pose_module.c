@@ -412,7 +412,16 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     }
     if (!ensure_comp(a)) return;
     if (now - P.last_vis > 1000) { P.last_vis = now; if (!P.nohide) set_visible(a, a->puppet_mesh, 0); }   /* keep the clip-driven mesh hidden */
-    if (now - P.last_opt > 3000) { P.last_opt = now; tickopt_probe(a); }                                      /* the optimizer may register the puppet again (level change, re-creation) */
+    if (now - P.last_opt > 3000) {
+        P.last_opt = now; tickopt_probe(a);                                                                  /* the optimizer may register the puppet again (level change, re-creation) */
+        {   /* the puppet must never block the player: the hidden original mesh used to keep QueryAndPhysics collision (an invisible wall where the puppet stands) */
+            uint8_t off = 0, none = 0, ignore = 0;
+            const char *n1[1] = { "bNewActorEnableCollision" }; const void *v1[1] = { &off }; int s1[1] = { 1 };
+            a->call_fn(a->puppet, "Actor", "SetActorEnableCollision", 1, n1, v1, s1, NULL, 0);
+            call1(a, a->puppet_mesh, "PrimitiveComponent", "SetCollisionEnabled", "NewType", &none, 1, NULL, 0);
+            call1(a, a->puppet_mesh, "PrimitiveComponent", "SetCollisionResponseToAllChannels", "NewResponse", &ignore, 1, NULL, 0);
+        }
+    }
     { int vv = variant_of_seat(); if (vv == 1 || vv == 3 || vv == 4) return; }    /* minimal / asset / attach variants: no bones are applied */
     if (a->remote_blob_seq != P.last_seq) { P.last_seq = a->remote_blob_seq; apply_blob(a); }
 }
