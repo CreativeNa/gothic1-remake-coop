@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define COREAPI_VERSION 8
+#define COREAPI_VERSION 9
 
 typedef struct CoreAPI {
     int version;
@@ -83,6 +83,10 @@ typedef struct CoreAPI {
     /* parameters of a UFunction without calling it, e.g. "NewRate@0/4 ReturnValue@4/1"; returns 0 if the function does not exist */
     int  (*describe_fn)(const char *outer, const char *fn, char *out, int cap);
     int  (*write_mem)(void *dst, const void *src, size_t n);                      /* guarded write, 1 = ok */
+
+    /* v9: second binary channel (shared world: NPC states), same rules as the first one */
+    void (*set_local_blob2)(const void *data, int len);
+    const uint8_t *remote_blob2; int remote_blob2_len; int remote_blob2_seq;
 } CoreAPI;
 
 /* exports of a module */

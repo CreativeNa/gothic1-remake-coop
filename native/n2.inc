@@ -384,13 +384,13 @@ static void freeze_at_end(uint8_t *seq)
 /* ================= hot-reloadable modules (modules\<name>.dll) ================= */
 #include "coreapi.h"
 static CoreAPI g_api;
-#define MAX_MODS 4
+#define MAX_MODS 6
 static struct ModSlot {
     const char *name;
     HMODULE h; ModUpdate_t update; ModShutdown_t shutdown; ModInit_t init;
     FILETIME mtime; int serial; int need_init; char loaded_path[MAX_PATH];
     int always;                 /* 1: called every engine tick (menu, loading screens, no friend needed); 0: only while the puppet exists */
-} g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "probe", .always = 1 } };
+} g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "npc" }, { .name = "probe", .always = 1 } };
 static int g_nmods = 4;
 
 static double seq_length_w(uint8_t *seq)
@@ -637,6 +637,9 @@ static int write_mem_w(void *dst, const void *src, size_t n)
 #define BLOB_CHUNK 1400
 static uint8_t g_lblob[BLOB_MAX]; static int g_lblob_len;
 static uint8_t g_rblob[BLOB_MAX], g_rasm[BLOB_MAX]; static int g_rblob_len, g_rblob_seq, g_rexpect;
+static uint8_t g_lblob2[BLOB_MAX]; static int g_lblob2_len;                       /* second channel (shared world: NPC states), "N|" chunks */
+static uint8_t g_rblob2[BLOB_MAX], g_rasm2[BLOB_MAX]; static int g_rblob2_len, g_rblob2_seq, g_rexpect2;
+static void set_local_blob2_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob2) len = 0; memcpy(g_lblob2, d, (size_t)len); g_lblob2_len = len; }
 static void set_local_blob_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob) len = 0; memcpy(g_lblob, d, (size_t)len); g_lblob_len = len; }
 
 /* ---- which AnimSequences got loaded since the last call? (the first call only records the baseline) ---- */
@@ -704,6 +707,7 @@ static void api_init(void)
     g_api.remote_extra = T.remote_extra;
     g_api.call_fn = call_fn_w;
     g_api.set_local_blob = set_local_blob_w;
+    g_api.set_local_blob2 = set_local_blob2_w; g_api.remote_blob2 = g_rblob2;
     g_api.set_attach_target = set_attach_target_w;
     g_api.remote_blob = g_rblob;
     g_api.list_members = list_members_w;
@@ -756,7 +760,7 @@ static void module_run(int always)
     g_api.crouched = T.rcrouch;
     g_api.action = T.ract; g_api.action_pkg = T.rpkg; g_api.fall_since = T.fall_since;
     g_api.hero = T.hero; g_api.puppet = T.marker; g_api.puppet_mesh = T.skcomp;
-    g_api.remote_blob_len = g_rblob_len; g_api.remote_blob_seq = g_rblob_seq; g_api.attach_gen = g_attach_gen;
+    g_api.remote_blob_len = g_rblob_len; g_api.remote_blob_seq = g_rblob_seq; g_api.attach_gen = g_attach_gen; g_api.remote_blob2_len = g_rblob2_len; g_api.remote_blob2_seq = g_rblob2_seq;
     for (int i = 0; i < g_nmods; i++) {
         struct ModSlot *m = &g_mods[i];
         if (m->always != always) continue;
@@ -1103,6 +1107,14 @@ static void frame_work(void)
                     sendto(T.sock, (const char *)bm, pl + 4, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
                 }
             }
+            if (g_lblob2_len > 0) {
+                int count = (g_lblob2_len + BLOB_CHUNK - 1) / BLOB_CHUNK;
+                for (int k = 0; k < count; k++) {
+                    uint8_t bm[BLOB_CHUNK + 8]; int pl = g_lblob2_len - k * BLOB_CHUNK; if (pl > BLOB_CHUNK) pl = BLOB_CHUNK;
+                    bm[0] = 'N'; bm[1] = '|'; bm[2] = (uint8_t)k; bm[3] = (uint8_t)count; memcpy(bm + 4, g_lblob2 + k * BLOB_CHUNK, (size_t)pl);
+                    sendto(T.sock, (const char *)bm, pl + 4, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
+                }
+            }
         }
         if (T.net_ok && !T.have_remote && T.frame % 600 == 0) logf_("net: still waiting for the first packet from the friend (check the address, the port and the firewall)");
         if (T.net_ok) {
@@ -1123,6 +1135,15 @@ static void frame_work(void)
                         memcpy(g_rasm + k * BLOB_CHUNK, rx + 4, (size_t)pl); g_rexpect++;
                         if (k == count - 1) { g_rblob_len = k * BLOB_CHUNK + pl; memcpy(g_rblob, g_rasm, (size_t)g_rblob_len); g_rblob_seq++; g_rexpect = 0; }
                     } else g_rexpect = 0;
+                    continue;
+                }
+                if (n > 4 && rx[0] == 'N' && rx[1] == '|') {
+                    int k = (uint8_t)rx[2], count = (uint8_t)rx[3], pl = n - 4;
+                    if (k == 0) g_rexpect2 = 0;
+                    if (k == g_rexpect2 && k * BLOB_CHUNK + pl <= BLOB_MAX) {
+                        memcpy(g_rasm2 + k * BLOB_CHUNK, rx + 4, (size_t)pl); g_rexpect2++;
+                        if (k == count - 1) { g_rblob2_len = k * BLOB_CHUNK + pl; memcpy(g_rblob2, g_rasm2, (size_t)g_rblob2_len); g_rblob2_seq++; g_rexpect2 = 0; }
+                    } else g_rexpect2 = 0;
                     continue;
                 }
                 char pid[16], ract[96] = "-", rpkg[256] = "-"; double x, y, z, yaw, rsp = -1, rvz = 0; int seq, rmm = 1, rcr = 0; char rextra[900] = "-";
