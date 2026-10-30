@@ -229,12 +229,15 @@ static void tickopt_probe(CoreAPI *a)
     }
     if (!sys) { a->log("P tickopt: no BFGTickOptimizerSystem instance"); return; }
     char d[300], pn[64];
+    uint8_t registered = 1;
     if (a->describe_fn("BFGTickOptimizerSystem", "IsActorRegisteredAndActive", d, sizeof d)) {
         first_param(d, pn, sizeof pn);
         uint8_t ret[8] = { 0 }; const char *names[1] = { pn }; const void *vals[1] = { &a->puppet }; int sizes[1] = { 8 };
         a->call_fn(sys, "BFGTickOptimizerSystem", "IsActorRegisteredAndActive", 1, names, vals, sizes, ret, 8);
-        a->log("P tickopt: IsActorRegisteredAndActive(puppet) = %d  [%s]", ret[0], d);
+        registered = ret[0];
+        if (registered) a->log("P tickopt: the optimizer has the puppet registered (IsActorRegisteredAndActive = 1)");
     }
+    if (!registered) return;                                 /* already opted out: nothing to do, nothing to log */
     /* opt the puppet out of the optimizer: SetTickOptimizationRuntime_Enabled(Actor, OptimizationEnabled). build\pose_tickopt_keep.txt = leave it optimized (to compare) */
     if (GetFileAttributesA("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_tickopt_keep.txt") == INVALID_FILE_ATTRIBUTES &&
         a->describe_fn("BFGTickOptimizerSystem", "SetTickOptimizationRuntime_Enabled", d, sizeof d)) {
