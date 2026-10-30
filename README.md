@@ -78,7 +78,7 @@ Set up a **copy** of the game in a separate folder (`tools\setup_test.ps1`) so t
 
 ### Performance with two copies
 
-Copy `tools\couchlink\perf_cmds.example.txt` to `nativeuild\perf_cmds.txt`: its console commands (resolution scale, shadow / effects / texture quality) run in every copy once its hero exists. The window that is not in the foreground is also limited to 30 fps (`t.MaxFPS 30`); `nativeuild\perf_nocap.txt` switches that off.
+Copy `tools\couchlink\perf_cmds.example.txt` to `nativeuild\perf_cmds.txt`: its console commands (resolution scale, shadow / effects / texture quality) run in every copy once its hero exists. The window that is not in the foreground is limited to 30 fps (`t.MaxFPS 30`) only while `nativebuildperf_cap.txt` exists; `nativeuild\perf_nocap.txt` switches that off.
 
 ## Development tools
 

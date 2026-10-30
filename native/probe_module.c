@@ -547,7 +547,7 @@ static void autoload_tick(void)
 
 /* ---- performance for two copies on one GPU ----
  *  - build\perf_cmds.txt: console commands (one per line, e.g. "r.ScreenPercentage 80") run once per world, as soon as the hero exists
- *  - the window that is not in the foreground is limited to 30 fps (t.MaxFPS 30) and released (t.MaxFPS 0) when it gets the focus; build\perf_nocap.txt switches this off */
+ *  - the window that is not in the foreground is limited to 30 fps (t.MaxFPS 30) and released (t.MaxFPS 0) when it gets the focus; build\perf_cap.txt switches this off */
 static int console_cmd(const char *text)
 {
     uint8_t *o = A->find_object(NULL, "Default__KismetSystemLibrary", NULL); uint8_t *world = find_world();
@@ -580,8 +580,8 @@ static void perf_tick(void)
         FILE *f = fopen(path, "r");
         if (f) { char line[300]; int n = 0; while (fgets(line, sizeof line, f)) { char *e = line + strlen(line); while (e > line && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0; if (!line[0] || line[0] == '#') continue; console_cmd(line); n++; } fclose(f); A->log("PR perf: ran %d console commands from perf_cmds.txt", n); }
     }
-    char np[MAX_PATH]; snprintf(np, sizeof np, "%s\\perf_nocap.txt", g_dir);
-    int want = GetFileAttributesA(np) != INVALID_FILE_ATTRIBUTES ? 0 : (other_game_has_focus() ? 1 : 0);   /* 1 = limited */
+    char np[MAX_PATH]; snprintf(np, sizeof np, "%s\\perf_cap.txt", g_dir);
+    int want = (GetFileAttributesA(np) != INVALID_FILE_ATTRIBUTES && other_game_has_focus()) ? 1 : 0;   /* 1 = limited; opt-in: only while build\perf_cap.txt exists */
     if (want != cap && now - cap_t > 3000) { cap = want; cap_t = now; console_cmd(want ? "t.MaxFPS 30" : "t.MaxFPS 0"); A->log("PR perf: %s, t.MaxFPS %s", want ? "the other copy has the focus" : "this copy has the focus or none of them", want ? "30" : "0 (unlimited)"); }
 }
 
