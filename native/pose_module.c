@@ -210,6 +210,40 @@ static int variant_of_seat(void)                              /* 0 full, 1 minim
     return v;
 }
 
+/* The game's BFGTickOptimizerSystem throttles actors by distance and tracks components by class. A crash after "hit, then run away from the puppet" had that system
+ * (and BFGInterpolationSystem) on the stack. Probe: ask it whether the puppet is registered and, with build\pose_tickopt_off.txt, switch the optimizer off. */
+static const char *first_param(const char *desc, char *out, size_t cap)          /* "Actor@0/8 ReturnValue@8/1" -> "Actor" */
+{
+    out[0] = 0; const char *at = strchr(desc, '@'); if (!at) return out;
+    const char *s = at; while (s > desc && s[-1] != ' ') s--;
+    size_t n = (size_t)(at - s); if (n >= cap) n = cap - 1; memcpy(out, s, n); out[n] = 0; return out;
+}
+static void tickopt_probe(CoreAPI *a)
+{
+    uint8_t *sys = NULL; char nm[160], cn[96];
+    int n = a->num_objects();
+    for (int i = 0; i < n && !sys; i++) {
+        uint8_t *o = a->object_at(i); if (!o) continue;
+        a->obj_name(a->obj_class(o), cn, sizeof cn); if (strcmp(cn, "BFGTickOptimizerSystem") != 0) continue;
+        a->obj_name(o, nm, sizeof nm); if (strncmp(nm, "Default__", 9) != 0) sys = o;
+    }
+    if (!sys) { a->log("P tickopt: no BFGTickOptimizerSystem instance"); return; }
+    char d[300], pn[64];
+    if (a->describe_fn("BFGTickOptimizerSystem", "IsActorRegisteredAndActive", d, sizeof d)) {
+        first_param(d, pn, sizeof pn);
+        uint8_t ret[8] = { 0 }; const char *names[1] = { pn }; const void *vals[1] = { &a->puppet }; int sizes[1] = { 8 };
+        a->call_fn(sys, "BFGTickOptimizerSystem", "IsActorRegisteredAndActive", 1, names, vals, sizes, ret, 8);
+        a->log("P tickopt: IsActorRegisteredAndActive(puppet) = %d  [%s]", ret[0], d);
+    }
+    if (GetFileAttributesA("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_tickopt_off.txt") != INVALID_FILE_ATTRIBUTES &&
+        a->describe_fn("BFGTickOptimizerSystem", "SetTickOptimizationRuntime_Enabled", d, sizeof d)) {
+        first_param(d, pn, sizeof pn);
+        uint8_t off = 0; const char *names[1] = { pn }; const void *vals[1] = { &off }; int sizes[1] = { 1 };
+        int ok = a->call_fn(sys, "BFGTickOptimizerSystem", "SetTickOptimizationRuntime_Enabled", 1, names, vals, sizes, NULL, 0);
+        a->log("P tickopt: optimizer switched OFF (param '%s') ok=%d  [%s]", pn, ok, d);
+    }
+}
+
 static int ensure_comp(CoreAPI *a)
 {
     if (P.comp && P.comp_puppet == a->puppet && a->obj_alive(P.comp, NULL)) return 1;
@@ -265,6 +299,7 @@ static int ensure_comp(CoreAPI *a)
     P.comp = comp; P.comp_puppet = a->puppet; P.last_seq = 0; P.applied = 0;
     a->set_attach_target(comp);
     a->log("P puppet now bone-driven: comp %p asset %p", comp, asset);
+    tickopt_probe(a);
     return 1;
 }
 
