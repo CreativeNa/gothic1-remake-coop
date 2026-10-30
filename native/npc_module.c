@@ -97,12 +97,20 @@ static int clip_of(CoreAPI *a, uint8_t *o, char *name, int ncap, char *pkg, int 
     int ost = a->find_prop_offset(a->obj_class(mont), "SlotAnimTracks"); if (ost < 0) return 0;
     uint8_t *tracks = NULL; int32_t nt = 0; a->read_mem(mont + ost, &tracks, 8); a->read_mem(mont + ost + 8, &nt, 4);
     if (!tracks || nt <= 0) return 0;
-    uint8_t *segs = NULL; int32_t ns = 0; a->read_mem(tracks + 8, &segs, 8); a->read_mem(tracks + 16, &ns, 4);
-    if (!segs || ns <= 0) return 0;
-    uint8_t *ref = NULL; a->read_mem(segs, &ref, 8); if (!ref) return 0;
-    a->obj_name(ref, name, ncap);
-    uint8_t *pk = NULL; a->read_mem(ref + 0x20, &pk, 8); if (pk) a->obj_name(pk, pkg, pcap);
-    return name[0] != 0;
+    /* every slot track (FSlotAnimationTrack, 24 bytes) and every segment (FAnimSegment, 32 bytes): the first track can be a facial animation (FA_*), which on the whole mesh gives a T-pose */
+    for (int t = 0; t < nt && t < 6; t++) {
+        uint8_t *segs = NULL; int32_t ns = 0; a->read_mem(tracks + (size_t)t * 24 + 8, &segs, 8); a->read_mem(tracks + (size_t)t * 24 + 16, &ns, 4);
+        if (!segs || ns <= 0) continue;
+        for (int k = 0; k < ns && k < 4; k++) {
+            uint8_t *ref = NULL; a->read_mem(segs + (size_t)k * 32, &ref, 8); if (!ref || !a->obj_alive(ref, NULL)) continue;
+            char tmp[120]; a->obj_name(ref, tmp, sizeof tmp);
+            if (strncmp(tmp, "FA_", 3) == 0 || strncmp(tmp, "Face", 4) == 0) continue;
+            snprintf(name, ncap, "%s", tmp);
+            uint8_t *pk = NULL; a->read_mem(ref + 0x20, &pk, 8); if (pk) a->obj_name(pk, pkg, pcap);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* ---- host ---- */
@@ -126,6 +134,7 @@ static void host_tick(CoreAPI *a, unsigned long now)
         r.yaw = (int16_t)(yaw_of(a, o) * 182.04); r.speed = (uint16_t)speed_of(a, o);
         char cn[120], cp[200];
         if (clip_of(a, o, cn, sizeof cn, cp, sizeof cp)) {
+            { static char lastc[8][120]; static int nl; int seen = 0; for (int q = 0; q < nl; q++) if (!strcmp(lastc[q], cn)) seen = 1; if (!seen && nl < 8) { snprintf(lastc[nl++], 120, "%s", cn); a->log("N host: NPC clip %s (%s)", cn, cp); } }
             char both[300]; snprintf(both, sizeof both, "%s|%s", cn, cp);
             int k = -1; for (int j = 0; j < nstr; j++) if (strcmp(strs[j], both) == 0) k = j;
             if (k < 0 && nstr < 40 && strpos + (int)strlen(both) + 1 < (int)sizeof strtab) { k = nstr; snprintf(strs[nstr++], 200, "%s", both); memcpy(strtab + strpos, both, strlen(both) + 1); strpos += (int)strlen(both) + 1; }
@@ -162,9 +171,11 @@ static void set_anim(CoreAPI *a, Mirror *m)
     }
     char nm[100], pk[200] = "-"; snprintf(nm, sizeof nm, "%s", m->anim);
     char *bar = strchr(nm, '|'); if (bar) { *bar = 0; snprintf(pk, sizeof pk, "%s", bar + 1); }
-    uint8_t *seq = a->clip_by_name(nm, pk); if (!seq) return;
+    uint8_t *seq = a->clip_by_name(nm, pk);
+    if (!seq) { a->log("N guest: clip %s not found (pkg %s)", nm, pk); return; }
     uint8_t lp = 1; const char *n[2] = { "NewAnimToPlay", "bLooping" }; const void *v[2] = { &seq, &lp }; int s[2] = { 8, 1 };
-    a->call_fn(mesh, "SkeletalMeshComponent", "PlayAnimation", 2, n, v, s, NULL, 0);
+    int ok = a->call_fn(mesh, "SkeletalMeshComponent", "PlayAnimation", 2, n, v, s, NULL, 0);
+    a->log("N guest: play %s -> ok=%d", nm, ok);
 }
 
 static void freeze(CoreAPI *a, Mirror *m)
