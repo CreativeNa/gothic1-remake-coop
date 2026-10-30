@@ -88,6 +88,8 @@ Set up a **copy** of the game in a separate folder (`tools\setup_test.ps1`) so t
 | `dev.ps1 shots` | screenshot all monitors |
 | `dev.ps1 status` / `dev.ps1 log` | running games, recent problems, newest crash dump decoded (`tools\dmpinfo.py`) |
 
+**Auto-continue:** create `native\build\autoload.txt` (optionally with the lines `wait=6` and `gap=25`) and every copy presses "Continue" in the main menu by itself, so a restarted game is back in its newest save without a click. The second Couchlink seat waits `gap` seconds longer so the two loads do not hit the GPU at once. Remove the file to switch it off. It calls the game's own `MainMenuWidget::OnContinueClicked` (found with the probe console).
+
 The `probe` module (`native/probe_module.c`) reads `native\build\probe_cmd.txt` and answers in `probe_out_<pid>.txt`. Rule of thumb: put new game logic into modules, not into the core, so a change never costs a restart.
 
 ## Repository layout

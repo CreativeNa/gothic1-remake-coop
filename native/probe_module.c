@@ -298,6 +298,20 @@ static void run_command(char *line)
         P("destroyed %d, hid stuck half-destroyed %d, kept %d (with an owner)", done, hidden, skipped);
         return;
     }
+    if (!strcmp(c, "findfn") && nt >= 2) {                           /* findfn <nameSub> [outerSub] [max]: UFunctions whose name contains the text, with their class */
+        const char *osub = nt > 2 && strcmp(tok[2], "*") ? tok[2] : NULL; int max = nt > 3 ? atoi(tok[3]) : 40, shown = 0, total = 0;
+        int n = A->num_objects(); char nm[200], cn[96], on[200];
+        for (int i = 0; i < n; i++) {
+            uint8_t *o = A->object_at(i); if (!o) continue;
+            A->obj_name(A->obj_class(o), cn, sizeof cn); if (strcmp(cn, "Function") != 0) continue;
+            A->obj_name(o, nm, sizeof nm); if (!ci_has(nm, tok[1])) continue;
+            uint8_t *outer = NULL; A->read_mem(o + 0x20, &outer, 8); on[0] = 0; if (outer) A->obj_name(outer, on, sizeof on);
+            if (!ci_has(on, osub)) continue;
+            total++; if (shown < max) { shown++; P("  %s::%s", on, nm); }
+        }
+        P("%d matches, %d shown", total, shown);
+        return;
+    }
     if (!strcmp(c, "findall") && nt >= 2) {
         const char *csub = tok[1], *nsub = nt > 2 && strcmp(tok[2], "*") ? tok[2] : NULL; int max = nt > 3 ? atoi(tok[3]) : 30, shown = 0, total = 0;
         int n = A->num_objects(); char nm[160], cn[96];
@@ -435,6 +449,43 @@ static void poll(void)
     if (o) { fwrite(g_out, 1, (size_t)g_olen, o); fclose(o); }
 }
 
+/* ---- autoload: press "Continue" in the main menu by itself, so a restarted copy is back in its save without a click.
+ * On when build\autoload.txt exists. Optional lines in it:  "gap=25"  seconds added per Couchlink seat (the second copy waits longer, two loads at once
+ * would fill the GPU); "wait=6"  seconds the menu must have been up. The game's own MainMenuWidget::OnContinueClicked is called (it loads the newest save). ---- */
+static struct { uint8_t *menu; unsigned long seen_t, last_try, scan_t; int tries; int reported_disabled; } AL;
+static int al_seat(void) { static int s = -2; if (s == -2) { const char *c = strstr(GetCommandLineA(), "-CoopSeat="); s = c ? atoi(c + 10) : 0; } return s; }
+static void autoload_tick(void)
+{
+    static unsigned long t; unsigned long now = GetTickCount();
+    if (now - t < 1000) return; t = now;
+    char path[MAX_PATH]; snprintf(path, sizeof path, "%s\\autoload.txt", g_dir);
+    FILE *f = fopen(path, "r"); if (!f) return;
+    int gap = 25, wait = 6; char line[100];
+    while (fgets(line, sizeof line, f)) { if (!strncmp(line, "gap=", 4)) gap = atoi(line + 4); else if (!strncmp(line, "wait=", 5)) wait = atoi(line + 5); }
+    fclose(f);
+    if (A->hero) { AL.tries = 0; AL.seen_t = 0; return; }                  /* already in a save */
+    if (AL.menu && !live(AL.menu)) AL.menu = NULL;
+    if (!AL.menu) {
+        if (now - AL.scan_t < 2000) return; AL.scan_t = now;
+        int n = A->num_objects(); char nm[160], cn[96];
+        for (int i = 0; i < n && !AL.menu; i++) {
+            uint8_t *o = A->object_at(i); if (!o) continue;
+            A->obj_name(A->obj_class(o), cn, sizeof cn); if (strcmp(cn, "W_MainMenu_C") != 0) continue;
+            A->obj_name(o, nm, sizeof nm); if (strncmp(nm, "Default__", 9) != 0) AL.menu = o;
+        }
+        if (!AL.menu) { AL.seen_t = 0; return; }
+    }
+    if (!AL.seen_t) { AL.seen_t = now; A->log("PR autoload: main menu widget %p found, waiting %d s (+%d s for seat %d)", AL.menu, wait, gap * al_seat(), al_seat()); }
+    if (now - AL.seen_t < (unsigned long)(wait + gap * al_seat()) * 1000) return;
+    int act = 0; A->call_fn(AL.menu, "CommonActivatableWidget", "IsActivated", 0, NULL, NULL, NULL, &act, 1);
+    if (!(act & 255)) return;                                                /* the menu must be the active page (not the intro / disclaimer); the bitfield itself reads as garbage */
+    int en = 0; A->call_fn(AL.menu, "MainMenuWidget", "IsContinueEnabled", 0, NULL, NULL, NULL, &en, 1);
+    if (!(en & 255)) { if (!AL.reported_disabled) { AL.reported_disabled = 1; A->log("PR autoload: 'Continue' is not enabled (no save to continue?)"); } return; }
+    if (AL.tries >= 3 || (AL.tries && now - AL.last_try < 90000)) return;    /* retry only if the hero did not appear within 90 s */
+    A->call_fn(AL.menu, "MainMenuWidget", "OnContinueClicked", 0, NULL, NULL, NULL, NULL, 0);
+    AL.tries++; AL.last_try = now; A->log("PR autoload: pressed 'Continue' (try %d)", AL.tries);
+}
+
 /* frame statistics of this game process: engine ticks per second and the worst frame, with a flag whether its window is the foreground one */
 static void frame_stats(void)
 {
@@ -455,6 +506,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
 {
     A = a;
     frame_stats();
+    __try { autoload_tick(); } __except (EXCEPTION_EXECUTE_HANDLER) { a->log("PR autoload: exception 0x%lx, skipped", GetExceptionCode()); }
     unsigned long now = GetTickCount();
     if (now - g_last_poll < 250) return;
     g_last_poll = now;
