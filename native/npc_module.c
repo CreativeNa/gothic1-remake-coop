@@ -33,7 +33,7 @@ typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long las
 
 static struct {
     Known known[2048]; int nknown; unsigned long last_scan, last_send, last_stat;
-    struct { uint8_t *cls; int v; } cc[1024]; int ncc; int scan_pos, scanning, scan_n; Known tmp[2048]; int ntmp;
+    struct { uint8_t *cls; int v; } cc[16384]; int ncc; int scan_pos, scanning, scan_n; Known tmp[2048]; int ntmp;
     Mirror m[MAXN]; int nm; int last_seq;
     int role, off; int off_vel; unsigned long t_prev;
     int n_sent, n_applied, n_missing;
@@ -55,23 +55,26 @@ static uint8_t *ptr_prop(CoreAPI *a, uint8_t *obj, const char *name)
     return p;
 }
 
-static int is_character_class(CoreAPI *a, uint8_t *cls)
+static int class_chain_has_agent(CoreAPI *a, uint8_t *cls)
 {
-    unsigned h = (unsigned)(((uintptr_t)cls >> 4) * 2654435761u) & 1023;
-    for (int p = 0; p < 8; p++) {
-        unsigned i = (h + p) & 1023;
-        if (N.cc[i].cls == cls) return N.cc[i].v;
-        if (!N.cc[i].cls) {
-            int v = 0; char nm[96]; uint8_t *c = cls;
-            for (int d = 0; c && d < 14; d++) {
-                a->obj_name(c, nm, sizeof nm);
-                if (strcmp(nm, "AIAgentCharacter") == 0) { v = 1; break; }
-                uint8_t *sup = NULL; a->read_mem(c + 0x40, &sup, 8); c = sup;
-            }
-            N.cc[i].cls = cls; N.cc[i].v = v; return v;
-        }
+    char nm[96]; uint8_t *c = cls;
+    for (int d = 0; c && d < 14; d++) {
+        a->obj_name(c, nm, sizeof nm);
+        if (strcmp(nm, "AIAgentCharacter") == 0) return 1;
+        uint8_t *sup = NULL; a->read_mem(c + 0x40, &sup, 8); c = sup;
     }
     return 0;
+}
+/* hashed cache (the game has thousands of distinct classes); when the table is full a class is simply computed again */
+static int is_character_class(CoreAPI *a, uint8_t *cls)
+{
+    unsigned h = (unsigned)(((uintptr_t)cls >> 4) * 2654435761u) & 16383;
+    for (int p = 0; p < 64; p++) {
+        unsigned i = (h + p) & 16383;
+        if (N.cc[i].cls == cls) return N.cc[i].v;
+        if (!N.cc[i].cls) { int v = class_chain_has_agent(a, cls); N.cc[i].cls = cls; N.cc[i].v = v; return v; }
+    }
+    return class_chain_has_agent(a, cls);
 }
 
 /* the object array has ~450000 entries: scan it in slices over many frames (one slice per call) instead of one long frame every few seconds */
@@ -224,7 +227,8 @@ static void host_tick(CoreAPI *a, unsigned long now)
     memcpy(buf + 5, recs, (size_t)cnt * sizeof(Rec)); memcpy(buf + 5 + cnt * sizeof(Rec), strtab, (size_t)strpos);
     int blen = 5 + cnt * (int)sizeof(Rec) + strpos;
     buf[blen++] = 0;                                                         /* pose section: 0 = none, 1 = id (4), bone count (2), 12 bytes per bone */
-    if (N.nfocus > 0 && blen + 6 + MAXB * 12 <= (int)sizeof buf) {
+    static unsigned long t_nb; static int nobones; if (now - t_nb > 1000) { t_nb = now; nobones = GetFileAttributesA(BUILD "npc_nobones.txt") != INVALID_FILE_ATTRIBUTES; }
+    if (!nobones && N.nfocus > 0 && blen + 6 + MAXB * 12 <= (int)sizeof buf) {
         uint8_t *o = N.focus[N.rr++ % N.nfocus]; static uint8_t pb[MAXB * 12]; int nb = 0;
         uint32_t id = 0; for (int i = 0; i < N.nknown; i++) if (N.known[i].actor == o) id = N.known[i].id;
         if (id && read_pose(a, o, pb, &nb) && blen + 6 + nb * 12 <= (int)sizeof buf) {
