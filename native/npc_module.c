@@ -26,8 +26,8 @@ typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_
 #pragma pack(pop)
 
 typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1; } Transform;   /* FTransform: FQuat, translation, scale */
-typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12]; int have, dirty; unsigned long t, topt; } GPose;   /* guest: bone-driven copy of one NPC */
-typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
+typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int have, dirty, napplied; unsigned long t, topt; } GPose;   /* guest: bone-driven copy of one NPC */
+typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; uint8_t last[MAXB * 12]; unsigned long next_t; int interval; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
 typedef struct { uint8_t *actor; uint32_t id; } Known;
 typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
 
@@ -229,9 +229,15 @@ static void host_tick(CoreAPI *a, unsigned long now)
     buf[blen++] = 0;                                                         /* pose section: 0 = none, 1 = id (4), bone count (2), 12 bytes per bone */
     static unsigned long t_nb; static int nobones; if (now - t_nb > 1000) { t_nb = now; nobones = GetFileAttributesA(BUILD "npc_nobones.txt") != INVALID_FILE_ATTRIBUTES; }
     if (!nobones && N.nfocus > 0 && blen + 6 + MAXB * 12 <= (int)sizeof buf) {
-        uint8_t *o = N.focus[N.rr++ % N.nfocus]; static uint8_t pb[MAXB * 12]; int nb = 0;
-        uint32_t id = 0; for (int i = 0; i < N.nknown; i++) if (N.known[i].actor == o) id = N.known[i].id;
+        uint8_t *o = NULL; HPose *hp = NULL;                                      /* the next focus NPC whose turn has come (a pose that did not change is read less and less often) */
+        for (int k = 0; k < N.nfocus && !o; k++) { uint8_t *c = N.focus[N.rr++ % N.nfocus]; HPose *h = hpose_for(c); if (now >= h->next_t) { o = c; hp = h; } }
+        static uint8_t pb[MAXB * 12]; int nb = 0;
+        uint32_t id = 0; if (o) for (int i = 0; i < N.nknown; i++) if (N.known[i].actor == o) id = N.known[i].id;
         if (id && read_pose(a, o, pb, &nb) && blen + 6 + nb * 12 <= (int)sizeof buf) {
+            int same = hp->nb == nb && memcmp(hp->last, pb, (size_t)nb * 12) == 0;
+            memcpy(hp->last, pb, (size_t)nb * 12);
+            hp->interval = same ? (hp->interval < 150 ? 300 : (hp->interval * 2 > 2500 ? 2500 : hp->interval * 2)) : 150;
+            hp->next_t = now + (unsigned long)hp->interval;
             buf[blen - 1] = 1; memcpy(buf + blen, &id, 4); buf[blen + 4] = (uint8_t)(nb & 255); buf[blen + 5] = (uint8_t)(nb >> 8); memcpy(buf + blen + 6, pb, (size_t)nb * 12); blen += 6 + nb * 12;
         }
     }
@@ -326,7 +332,7 @@ static int gp_ensure(CoreAPI *a, Mirror *m, GPose *g)
     { const char *nn[1] = { "bInGenerateOverlapEvents" }; const void *vv[1] = { &off }; int ss[1] = { 1 }; a->call_fn(comp, "PrimitiveComponent", "SetGenerateOverlapEvents", 1, nn, vv, ss, NULL, 0); }
     { int lod0 = 1; const char *nn[1] = { "InNewForcedLOD" }; const void *vv[1] = { &lod0 }; int ss[1] = { 4 }; a->call_fn(comp, "SkinnedMeshComponent", "SetForcedLOD", 1, nn, vv, ss, NULL, 0); }
     set_visible(a, comp, 1); set_visible(a, mesh, 0);
-    g->comp = comp; g->mesh = mesh; g->nbn = 0;
+    g->comp = comp; g->mesh = mesh; g->nbn = 0; g->napplied = 0;
     a->log("N guest: NPC %p now bone-driven (poseable %p)", m->actor, comp);
     return 1;
 }
@@ -343,6 +349,7 @@ static void gp_apply(CoreAPI *a, Mirror *m)
     }
     for (int i = 0; i < g->nb; i++) {
         int16_t v[6]; memcpy(v, g->data + i * 12, 12);
+        if (g->napplied == g->nb && memcmp(g->applied + i * 12, g->data + i * 12, 12) == 0) continue;     /* this bone did not change: no engine call */
         if (strncmp(g->names[i], "ik_", 3) == 0) continue;
         if (i > 0 && !(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) continue;
         double x = v[0] / 32767.0, y = v[1] / 32767.0, z = v[2] / 32767.0, w2 = 1.0 - x * x - y * y - z * z;
@@ -351,6 +358,7 @@ static void gp_apply(CoreAPI *a, Mirror *m)
         const char *names[3] = { "BoneName", "InTransform", "BoneSpace" }; const void *vals[3] = { g->fnm[i], &tr, &space }; int sizes[3] = { -2, (int)sizeof tr, 1 };
         a->call_fn(g->comp, "PoseableMeshComponent", "SetBoneTransformByName", 3, names, vals, sizes, NULL, 0);
     }
+    memcpy(g->applied, g->data, (size_t)g->nb * 12); g->napplied = g->nb;
     N.n_posed++;
 }
 
@@ -413,7 +421,7 @@ static void guest_tick(CoreAPI *a, unsigned long now)
         if (!m->actor || !a->obj_alive(m->actor, NULL)) { m->frozen = 0; continue; }
         if (!m->frozen) continue;
         if (m->gp) {
-            if (now - m->gp->t > 3000) { gp_drop(a, m); set_anim(a, m); }          /* no longer one of the host's focus NPCs: the original mesh and its animation come back */
+            if (now - m->gp->t > 8000) { gp_drop(a, m); set_anim(a, m); }          /* no longer one of the host's focus NPCs: the original mesh and its animation come back */
             else { if (now - m->gp->topt > 3000) { m->gp->topt = now; tickopt_off(a, m->actor); } gp_apply(a, m); }
         }
         if (now - m->last_seen > 5000) { release(a, m); continue; }              /* the host no longer reports it (far away): give the AI back */
