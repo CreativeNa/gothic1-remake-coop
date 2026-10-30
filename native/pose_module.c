@@ -203,7 +203,7 @@ static int variant_of_seat(void)                              /* 0 full, 1 minim
         char line[200] = ""; if (fgets(line, sizeof line, f)) {
             char key[24]; snprintf(key, sizeof key, "seat%d=", my_seat_no());
             char *p = strstr(line, key);
-            if (p) { p += strlen(key); if (!strncmp(p, "minimal", 7)) v = 1; else if (!strncmp(p, "noextra", 7)) v = 2; else if (!strncmp(p, "asset", 5)) v = 3; else if (!strncmp(p, "attach", 6)) v = 4; }
+            if (p) { p += strlen(key); if (!strncmp(p, "minimal", 7)) v = 1; else if (!strncmp(p, "noextra", 7)) v = 2; else if (!strncmp(p, "asset", 5)) v = 3; else if (!strncmp(p, "attach", 6)) v = 4; else if (!strncmp(p, "bones", 5)) v = 5; }
         }
         fclose(f);
     }
@@ -236,9 +236,9 @@ static int ensure_comp(CoreAPI *a)
     uint8_t reinit = 1;
     const char *n2[2] = { "NewMesh", "bReinitPose" }; const void *v2[2] = { &asset, &reinit }; int s2[2] = { 8, 1 };
     a->call_fn(comp, "SkinnedMeshComponent", "SetSkinnedAssetAndUpdate", 2, n2, v2, s2, NULL, 0);
-    if (variant == 3) {                                     /* asset: component + mesh, no attach, no collision/LOD calls, no bones */
-        P.comp = comp; P.comp_puppet = a->puppet;
-        a->log("P variant ASSET (seat %d): poseable component %p has the hero mesh, not attached", my_seat_no(), comp);
+    if (variant == 3 || variant == 5) {                     /* asset: component + mesh, no attach, no collision/LOD calls, no bones; bones: the same, but the bone poses ARE applied */
+        P.comp = comp; P.comp_puppet = a->puppet; P.last_seq = 0; P.applied = 0;
+        a->log("P variant %s (seat %d): poseable component %p has the hero mesh, not attached", variant == 3 ? "ASSET" : "BONES", my_seat_no(), comp);
         return 1;
     }
     uint8_t snap = 2, weld = 0; uint8_t *par = a->puppet_mesh;

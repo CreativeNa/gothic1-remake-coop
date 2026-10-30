@@ -39,9 +39,47 @@ static int ci_has(const char *s, const char *sub)
     return 0;
 }
 
+/* ---- crash context: when the game thread faults on a near-null pointer inside the exe, name every game object found in the registers and on the stack ---- */
+static PVOID g_veh;
+static int is_uobject(uint8_t *p)
+{
+    if (!p || ((uintptr_t)p & 7) || (uintptr_t)p < 0x10000 || (uintptr_t)p > 0x7fffffffffffULL) return 0;
+    int idx = -1; if (!A->read_mem(p + 0xC, &idx, 4) || idx < 0 || idx >= A->num_objects()) return 0;
+    return A->object_at(idx) == p;
+}
+static void describe_obj(const char *tag, uint8_t *p)
+{
+    char nm[160] = "", cn[96] = "", on[160] = "";
+    A->obj_name(p, nm, sizeof nm); A->obj_name(A->obj_class(p), cn, sizeof cn);
+    uint8_t *outer = NULL; A->read_mem(p + 0x20, &outer, 8); if (outer) A->obj_name(outer, on, sizeof on);
+    A->log("PR crash-context %s = %p %s (%s) outer=%s", tag, p, nm, cn, on);
+}
+static LONG CALLBACK crash_context(EXCEPTION_POINTERS *ep)
+{
+    static volatile LONG n;
+    if (ep->ExceptionRecord->ExceptionCode != 0xC0000005 || ep->ExceptionRecord->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
+    ULONG_PTR addr = ep->ExceptionRecord->ExceptionInformation[1];
+    uint8_t *rip = (uint8_t *)ep->ExceptionRecord->ExceptionAddress, *base = (uint8_t *)GetModuleHandleA(NULL);
+    if (addr >= 0x10000 || rip < base || rip > base + 0x8000000 || InterlockedIncrement(&n) > 6) return EXCEPTION_CONTINUE_SEARCH;
+    A->log("PR crash-context: near-null fault at exe+0x%llx, fault address 0x%llx", (unsigned long long)(rip - base), (unsigned long long)addr);
+    CONTEXT *c = ep->ContextRecord;
+    struct { const char *n; DWORD64 v; } regs[] = { {"rcx", c->Rcx}, {"rdx", c->Rdx}, {"r8", c->R8}, {"r9", c->R9}, {"rbx", c->Rbx}, {"rsi", c->Rsi}, {"rdi", c->Rdi}, {"rbp", c->Rbp}, {"r12", c->R12}, {"r13", c->R13}, {"r14", c->R14}, {"r15", c->R15} };
+    for (int i = 0; i < 12; i++) if (is_uobject((uint8_t *)regs[i].v)) describe_obj(regs[i].n, (uint8_t *)regs[i].v);
+    uint64_t *sp = (uint64_t *)c->Rsp; int shown = 0; uint8_t *seen[40]; int ns = 0;
+    for (int i = 0; i < 600 && shown < 30; i++) {
+        uint64_t v = 0; if (!A->read_mem(sp + i, &v, 8)) break;
+        uint8_t *p = (uint8_t *)v; if (!is_uobject(p)) continue;
+        int dup = 0; for (int k = 0; k < ns; k++) if (seen[k] == p) dup = 1; if (dup) continue;
+        if (ns < 40) seen[ns++] = p;
+        char tag[32]; snprintf(tag, sizeof tag, "stack+0x%x", i * 8); describe_obj(tag, p); shown++;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 __declspec(dllexport) void mod_init(CoreAPI *a)
 {
     A = a;
+    if (!g_veh) g_veh = AddVectoredExceptionHandler(1, crash_context);
     if (!g_out) g_out = (char *)malloc(OUTCAP + 16);
     char path[MAX_PATH]; HMODULE self = NULL;
     GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)&mod_init, &self);
@@ -52,7 +90,7 @@ __declspec(dllexport) void mod_init(CoreAPI *a)
     g_last_id[0] = 0;
     a->log("PR probe ready, dir %s", g_dir);
 }
-__declspec(dllexport) void mod_shutdown(CoreAPI *a) { (void)a; }
+__declspec(dllexport) void mod_shutdown(CoreAPI *a) { (void)a; if (g_veh) { RemoveVectoredExceptionHandler(g_veh); g_veh = NULL; } }
 
 /* ---------- pointers ---------- */
 static uint8_t *find_world(void)
