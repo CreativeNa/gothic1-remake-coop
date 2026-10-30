@@ -45,3 +45,11 @@ The puppet copies the hero's real skeleton instead of guessed clips (native/pose
 - Crashes (access violation reading 0xd50 / 0x108, no engine log available) happened while swinging the sword and moving. Suspected: clip playback on the hidden mesh (now paused while the pose module hides it), then spawn failures of item visuals (retry throttled). Not confirmed.
 - Items (quiver, bow, sword) attach to the poseable mesh sockets; they were once detached/floating; re-check.
 Debug switches (build\): pose_off.txt (back to clips), pose_mode.txt (0..3), pose_skip.txt ("min=N;substr;..." bones the receiver ignores), equip_off.txt (no items on the puppet), try_clip.txt (play a clip by name; "!" prefix freezes at the end). Screenshots of both monitors can be taken from PowerShell (CopyFromScreen) for checking visually.
+
+
+## Shared world: recon (2026-10-30)
+
+- NPCs and monsters are `AIAgentCharacter` > `GothicCharacter` > `ClientAuthoritativeCharacter` > `Character` (humans: `AIAgentCharacter_Human_Base_C`, animals e.g. `AIAgentCharacter_Scavenger_Young_C`). Probe command `npcs <radius> <max>` lists them with distance and class chain.
+- Instance names are stable and spawn-point based (`Character_NC_ORG_Ratford_818-WP_ExF_RATFORD_SPAWN`, `Character_ScavengerYoung-WP_ExF_HUT_SCAVENGER_SPAWN_01-1`), so two copies that loaded the same save can match an NPC by name.
+- An NPC is driven by a `GothicAIController` (`Pawn.Controller`). `Controller.UnPossess()` leaves the pawn standing with no AI; `Actor.K2_SetActorLocation` then moves it and it stays there. So the guest can freeze the AI of mirrored NPCs and place them from the host's data.
+- Plan (host-authoritative): seat 0 / the host runs the AI and sends id, position, rotation, speed, health of NPCs near either player over a second blob channel; the guest unpossesses those NPCs and applies the data (later the pose blob, death, and the guest's hits sent to the host).

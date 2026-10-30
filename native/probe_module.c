@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <stdarg.h>
 #include "coreapi.h"
 #pragma comment(lib, "user32.lib")
@@ -261,6 +262,25 @@ static void run_command(char *line)
             P("  0x%llx: %s::%s  (native starts at +0x%llx, %lld bytes before)", (unsigned long long)rva, on, nm, (unsigned long long)(bestf - base), (long long)(target - bestf));
         }
         return;
+    }
+    if (!strcmp(c, "npcs")) {                                           /* characters in the world with their class chain and distance to the hero */
+        double rad = nt > 1 ? atof(tok[1]) : 3000, hp[3] = {0,0,0}; int max = nt > 2 ? atoi(tok[2]) : 20, shown = 0, total = 0;
+        if (A->hero) A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hp, 24);
+        int n = A->num_objects(); char nm[160], cn[96], chain[300];
+        for (int i = 0; i < n; i++) {
+            uint8_t *o = A->object_at(i); if (!o || o == A->hero || o == A->puppet) continue;
+            uint8_t *cls = A->obj_class(o); if (!cls) continue;
+            int is = 0; chain[0] = 0; uint8_t *k = cls;
+            for (int d = 0; k && d < 14; d++) { A->obj_name(k, cn, sizeof cn); if (d < 6) { strcat(chain, cn); strcat(chain, ">"); } if (!strcmp(cn, "Character")) { is = 1; break; } uint8_t *sup = NULL; A->read_mem(k + 0x40, &sup, 8); k = sup; }
+            if (!is) continue;
+            A->obj_name(o, nm, sizeof nm); if (!strncmp(nm, "Default__", 9)) continue;
+            if (A->read_bool(o, "bActorIsBeingDestroyed") == 1) continue;
+            double lp[3] = {0,0,0}; if (!A->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, lp, 24)) continue;
+            double d2 = sqrt((lp[0]-hp[0])*(lp[0]-hp[0]) + (lp[1]-hp[1])*(lp[1]-hp[1]) + (lp[2]-hp[2])*(lp[2]-hp[2]));
+            total++; if (d2 > rad || shown >= max) continue;
+            shown++; P("  %p %s dist %.0f  %s", o, nm, d2, chain);
+        }
+        P("%d characters in total, %d shown (radius %.0f)", total, shown, rad); return;
     }
     if (!strcmp(c, "purge") && nt >= 2) {
         int max = nt > 2 ? atoi(tok[2]) : 1000, done = 0, skipped = 0, hidden = 0;
