@@ -14,6 +14,7 @@
 #include <string.h>
 #include "coreapi.h"
 
+#include <math.h>
 #define MAXV 8
 
 static struct {
@@ -127,11 +128,72 @@ static void describe_local(CoreAPI *a)
     }
 }
 
+/* ---- arrow flight on the puppet ----
+ * The game flies the real arrow only on the shooter's side. When the other player's action becomes a bow shot, an arrow visual is created at the puppet's
+ * chest and flown along the puppet's facing (ballistic curve, no collision) until it reaches ground level; it stays stuck for a few seconds, then is removed. */
+#define NFLY 4
+static struct { uint8_t *actor; double p[3], v[3], z_ground; unsigned long t_last, t_stuck; int state; } FL[NFLY];   /* state 0 free, 1 flying, 2 stuck */
+static char FL_last[160];
+
+static int vec_of(CoreAPI *a, uint8_t *obj, const char *outer, const char *fn, double *v)
+{
+    double r[3] = { 0, 0, 0 };
+    if (!a->call_fn(obj, outer, fn, 0, NULL, NULL, NULL, r, 24)) return 0;
+    v[0] = r[0]; v[1] = r[1]; v[2] = r[2]; return 1;
+}
+static void fl_free(CoreAPI *a, int i) { if (FL[i].actor && a->obj_alive(FL[i].actor, NULL)) a->destroy_actor(FL[i].actor); memset(&FL[i], 0, sizeof FL[i]); }
+static void fl_launch(CoreAPI *a)
+{
+    int i = -1; for (int k = 0; k < NFLY && i < 0; k++) if (!FL[k].state) i = k;
+    if (i < 0) { i = 0; fl_free(a, 0); }
+    uint8_t *cls = a->find_object("BlueprintGeneratedClass", "BP_ItAm_Arrow_Visual_C", NULL);
+    if (!cls) cls = a->load_asset("/Game/Items/Misc/BP_ItAm_Arrow_Visual", "BP_ItAm_Arrow_Visual_C");
+    if (!cls) return;
+    double loc[3], fwd[3];
+    if (!vec_of(a, a->puppet, "Actor", "K2_GetActorLocation", loc) || !vec_of(a, a->puppet, "Actor", "GetActorForwardVector", fwd)) return;
+    uint8_t *act = a->spawn_actor(cls); if (!act) return;
+    uint8_t off = 0; const char *n1[1] = { "bNewActorEnableCollision" }; const void *v1[1] = { &off }; int s1[1] = { 1 };
+    a->call_fn(act, "Actor", "SetActorEnableCollision", 1, n1, v1, s1, NULL, 0);
+    memset(&FL[i], 0, sizeof FL[i]);
+    FL[i].actor = act; FL[i].state = 1; FL[i].t_last = GetTickCount();
+    FL[i].p[0] = loc[0] + fwd[0] * 50; FL[i].p[1] = loc[1] + fwd[1] * 50; FL[i].p[2] = loc[2] + 40;   /* the actor origin is about at the hip */
+    FL[i].z_ground = loc[2] - 80;
+    for (int k = 0; k < 3; k++) FL[i].v[k] = fwd[k] * 5500.0;
+    FL[i].v[2] += 150.0;
+    a->log("E arrow shot: from %.0f %.0f %.0f", FL[i].p[0], FL[i].p[1], FL[i].p[2]);
+}
+static void shot_tick(CoreAPI *a)
+{
+    const char *act = a->action ? a->action : "-";
+    if (strcmp(act, FL_last) != 0) {
+        snprintf(FL_last, sizeof FL_last, "%s", act);
+        if (strstr(act, "Bow") && strstr(act, "Shoot")) fl_launch(a);
+    }
+    unsigned long now = GetTickCount();
+    for (int i = 0; i < NFLY; i++) {
+        if (!FL[i].state) continue;
+        if (!FL[i].actor || !a->obj_alive(FL[i].actor, NULL)) { memset(&FL[i], 0, sizeof FL[i]); continue; }
+        if (FL[i].state == 2) { if (now - FL[i].t_stuck > 5000) fl_free(a, i); continue; }
+        double dt = (now - FL[i].t_last) / 1000.0; if (dt > 0.1) dt = 0.1; FL[i].t_last = now;
+        FL[i].v[2] -= 1500.0 * dt;
+        for (int k = 0; k < 3; k++) FL[i].p[k] += FL[i].v[k] * dt;
+        double hz = sqrt(FL[i].v[0] * FL[i].v[0] + FL[i].v[1] * FL[i].v[1]);
+        double rot[3] = { atan2(FL[i].v[2], hz) * 57.29578, atan2(FL[i].v[1], FL[i].v[0]) * 57.29578, 0 };   /* pitch, yaw, roll */
+        uint8_t tp = 1, sw = 0;
+        const char *nl[3] = { "NewLocation", "bSweep", "bTeleport" }; const void *vl[3] = { FL[i].p, &sw, &tp }; int sl[3] = { 24, 1, 1 };
+        a->call_fn(FL[i].actor, "Actor", "K2_SetActorLocation", 3, nl, vl, sl, NULL, 0);
+        const char *nr[2] = { "NewRotation", "bTeleportPhysics" }; const void *vr[2] = { rot, &tp }; int sr[2] = { 24, 1 };
+        a->call_fn(FL[i].actor, "Actor", "K2_SetActorRotation", 2, nr, vr, sr, NULL, 0);
+        if (FL[i].p[2] <= FL[i].z_ground) { FL[i].state = 2; FL[i].t_stuck = now; }
+    }
+}
+
 __declspec(dllexport) void mod_update(CoreAPI *a)
 {
     unsigned long now = GetTickCount();
     if (a->hero && now - E.last_scan > 500) { E.last_scan = now; describe_local(a); }
     if (!a->have_remote || !a->puppet) return;
+    shot_tick(a);
 
     /* kill switch for isolating problems: build\equip_off.txt removes all visuals from the puppet and stops creating them */
     if (now - E.last_off > 1000) {
