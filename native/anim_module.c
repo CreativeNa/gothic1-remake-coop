@@ -81,6 +81,12 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (!a->have_remote) return;
     unsigned long now = GetTickCount();
 
+    {   /* debug switch: build\anim_off.txt = this module does nothing (bisecting a crash) */
+        static unsigned long off_t; static int off;
+        if (now - off_t > 1000) { off_t = now; int v = GetFileAttributesA("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\anim_off.txt") != INVALID_FILE_ATTRIBUTES; if (v != off) { off = v; a->log("M anim module %s (anim_off.txt)", v ? "OFF" : "ON"); } }
+        if (off) return;
+    }
+
     /* the pose module hides this mesh while it drives the puppet by bones: playing clips on it is pointless then, and loading clips by path stalls the game */
     static unsigned long vis_t; static int hidden;
     if (now - vis_t > 400 && a->puppet_mesh) {

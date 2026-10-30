@@ -21,7 +21,7 @@ typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1
 static struct {
     uint8_t *hmesh; int nb; char names[MAXB][64]; uint8_t fnm[MAXB][8]; int parent[MAXB]; int frame;
     uint8_t *comp, *comp_puppet, *pclass; unsigned long last_try, last_chk, last_vis;
-    int last_seq, off, failed, applied;
+    int last_seq, off, failed, applied, nohide, nocomp;
     int mode;                      /* build\pose_mode.txt: 0 component space both ways, 1 sender parent-bone space + applied as component, 2 parent-bone space + applied as world */
     int16_t last[MAXB][9];         /* what was applied last (rotation, location, scale), to skip unchanged bones */
     unsigned long last_count; int diag, diag2, nbad;
@@ -216,7 +216,7 @@ static int ensure_comp(CoreAPI *a)
     int lod0 = 1;                                           /* forced LOD 0 (1-based): distant LODs drop bones and the skin then stretches */
     call1(a, comp, "SkinnedMeshComponent", "SetForcedLOD", "InNewForcedLOD", &lod0, 4, NULL, 0);
     set_visible(a, comp, 1);
-    set_visible(a, a->puppet_mesh, 0);
+    if (!P.nohide) set_visible(a, a->puppet_mesh, 0);
     P.comp = comp; P.comp_puppet = a->puppet; P.last_seq = 0; P.applied = 0;
     a->set_attach_target(comp);
     a->log("P puppet now bone-driven: comp %p asset %p", comp, asset);
@@ -279,6 +279,11 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
 
     if (now - P.last_chk > 1000) {
         P.last_chk = now;
+        {   /* more switches for bisecting the crash: pose_nohide.txt = never hide the original puppet mesh, pose_nocomp.txt = never create the poseable component */
+            int nh = GetFileAttributesA("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_nohide.txt") != INVALID_FILE_ATTRIBUTES;
+            int nc = GetFileAttributesA("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_nocomp.txt") != INVALID_FILE_ATTRIBUTES;
+            if (nh != P.nohide || nc != P.nocomp) { P.nohide = nh; P.nocomp = nc; a->log("P switches: nohide=%d nocomp=%d", nh, nc); }
+        }
         int off = GetFileAttributesA("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_off.txt") != INVALID_FILE_ATTRIBUTES;
         FILE *mf = fopen("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_mode.txt", "r");
         int mode = 0; if (mf) { if (fscanf(mf, "%d", &mode) != 1) mode = 0; fclose(mf); }
@@ -307,9 +312,9 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
             if (off) { if (a->puppet_mesh) set_visible(a, a->puppet_mesh, 1); destroy_comp(a); }
         }
     }
-    if (P.off || P.failed > 3 || !a->have_remote || !a->puppet || !a->puppet_mesh) return;
+    if (P.off || P.nocomp || P.failed > 3 || !a->have_remote || !a->puppet || !a->puppet_mesh) return;
     if (!ensure_comp(a)) return;
-    if (now - P.last_vis > 1000) { P.last_vis = now; set_visible(a, a->puppet_mesh, 0); }   /* keep the clip-driven mesh hidden */
+    if (now - P.last_vis > 1000) { P.last_vis = now; if (!P.nohide) set_visible(a, a->puppet_mesh, 0); }   /* keep the clip-driven mesh hidden */
     if (a->remote_blob_seq != P.last_seq) { P.last_seq = a->remote_blob_seq; apply_blob(a); }
 }
 
