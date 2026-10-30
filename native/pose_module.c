@@ -21,7 +21,7 @@ typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1
 static struct {
     uint8_t *hmesh; int nb; char names[MAXB][64]; uint8_t fnm[MAXB][8]; int parent[MAXB]; int frame;
     uint8_t *comp, *comp_puppet, *pclass; unsigned long last_try, last_chk, last_vis;
-    int last_seq, off, failed, applied, nohide, nocomp;
+    int last_seq, off, failed, applied, nohide, nocomp; unsigned long last_opt;
     int mode;                      /* build\pose_mode.txt: 0 component space both ways, 1 sender parent-bone space + applied as component, 2 parent-bone space + applied as world */
     int16_t last[MAXB][9];         /* what was applied last (rotation, location, scale), to skip unchanged bones */
     unsigned long last_count; int diag, diag2, nbad;
@@ -235,12 +235,15 @@ static void tickopt_probe(CoreAPI *a)
         a->call_fn(sys, "BFGTickOptimizerSystem", "IsActorRegisteredAndActive", 1, names, vals, sizes, ret, 8);
         a->log("P tickopt: IsActorRegisteredAndActive(puppet) = %d  [%s]", ret[0], d);
     }
-    if (GetFileAttributesA("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_tickopt_off.txt") != INVALID_FILE_ATTRIBUTES &&
+    /* opt the puppet out of the optimizer: SetTickOptimizationRuntime_Enabled(Actor, OptimizationEnabled). build\pose_tickopt_keep.txt = leave it optimized (to compare) */
+    if (GetFileAttributesA("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\native\\build\\pose_tickopt_keep.txt") == INVALID_FILE_ATTRIBUTES &&
         a->describe_fn("BFGTickOptimizerSystem", "SetTickOptimizationRuntime_Enabled", d, sizeof d)) {
-        first_param(d, pn, sizeof pn);
-        uint8_t off = 0; const char *names[1] = { pn }; const void *vals[1] = { &off }; int sizes[1] = { 1 };
-        int ok = a->call_fn(sys, "BFGTickOptimizerSystem", "SetTickOptimizationRuntime_Enabled", 1, names, vals, sizes, NULL, 0);
-        a->log("P tickopt: optimizer switched OFF (param '%s') ok=%d  [%s]", pn, ok, d);
+        uint8_t off = 0; uint8_t *act = a->puppet;
+        const char *names[2] = { "Actor", "OptimizationEnabled" }; const void *vals[2] = { &act, &off }; int sizes[2] = { 8, 1 };
+        int ok = a->call_fn(sys, "BFGTickOptimizerSystem", "SetTickOptimizationRuntime_Enabled", 2, names, vals, sizes, NULL, 0);
+        uint8_t ret[8] = { 0 }; const char *n1[1] = { "_Actor" }; const void *v1[1] = { &act }; int s1[1] = { 8 };
+        a->call_fn(sys, "BFGTickOptimizerSystem", "IsActorRegisteredAndActive", 1, n1, v1, s1, ret, 8);
+        a->log("P tickopt: puppet opted out of the tick optimizer ok=%d, registered&active now = %d  [%s]", ok, ret[0], d);
     }
 }
 
@@ -395,6 +398,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (P.off || P.nocomp || P.failed > 3 || !a->have_remote || !a->puppet || !a->puppet_mesh) return;
     if (!ensure_comp(a)) return;
     if (now - P.last_vis > 1000) { P.last_vis = now; if (!P.nohide) set_visible(a, a->puppet_mesh, 0); }   /* keep the clip-driven mesh hidden */
+    if (now - P.last_opt > 3000) { P.last_opt = now; tickopt_probe(a); }                                      /* the optimizer may register the puppet again (level change, re-creation) */
     { int vv = variant_of_seat(); if (vv == 1 || vv == 3 || vv == 4) return; }    /* minimal / asset / attach variants: no bones are applied */
     if (a->remote_blob_seq != P.last_seq) { P.last_seq = a->remote_blob_seq; apply_blob(a); }
 }
