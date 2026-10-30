@@ -391,7 +391,7 @@ static struct ModSlot {
     FILETIME mtime; int serial; int need_init; char loaded_path[MAX_PATH];
     int always;                 /* 1: called every engine tick (menu, loading screens, no friend needed); 0: only while the puppet exists */
 } g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "npc" }, { .name = "probe", .always = 1 } };
-static int g_nmods = 4;
+static int g_nmods = 5;
 
 static double seq_length_w(uint8_t *seq)
 {
