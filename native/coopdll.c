@@ -259,15 +259,18 @@ static DWORD WINAPI worker(LPVOID arg)
 
     /* find FChunkedFixedUObjectArray inside it: {Objects**, PreAllocated*, Max, Num, MaxChunks, NumChunks} */
     int found = 0;
-    for (int off = 0; off <= 0x30; off += 8) {
-        uint8_t *chunks = (uint8_t *)rd64(arr + off);
-        int32_t max = rd32(arr + off + 0x10), num = rd32(arr + off + 0x14);
-        int32_t maxch = rd32(arr + off + 0x18), numch = rd32(arr + off + 0x1C);
-        if (chunks && max > 1000 && num > 1000 && num <= max && numch >= 1 && numch <= maxch && rd64(chunks)) {
-            g_objs_chunks = chunks; g_num_elements = num; found = 1;
-            logf_("ObjObjects at +0x%x: Num=%d Max=%d chunks=%d/%d", off, num, max, numch, maxch);
-            break;
+    for (int attempt = 0; attempt < 90 && !found; attempt++) {          /* injected early (while the engine is still starting): the object array fills up within seconds */
+        for (int off = 0; off <= 0x30; off += 8) {
+            uint8_t *chunks = (uint8_t *)rd64(arr + off);
+            int32_t max = rd32(arr + off + 0x10), num = rd32(arr + off + 0x14);
+            int32_t maxch = rd32(arr + off + 0x18), numch = rd32(arr + off + 0x1C);
+            if (chunks && max > 1000 && num > 1000 && num <= max && numch >= 1 && numch <= maxch && rd64(chunks)) {
+                g_objs_chunks = chunks; g_num_elements = num; found = 1;
+                logf_("ObjObjects at +0x%x: Num=%d Max=%d chunks=%d/%d (attempt %d)", off, num, max, numch, maxch, attempt);
+                break;
+            }
         }
+        if (!found) Sleep(1000);
     }
     if (!found) { logf_("could not locate ObjObjects"); return 1; }
 
@@ -276,20 +279,27 @@ static DWORD WINAPI worker(LPVOID arg)
     char nm[256];
     {   /* property layout (FField offsets) is detected on the Actor class; it needs no hero */
         uint8_t *actor = NULL;
-        for (int32_t i = 0; i < g_num_elements && !actor; i++) {
-            uint8_t *o = get_object(i);
-            if (!o) continue;
-            obj_name(o, nm, sizeof nm);
-            if (strcmp(nm, "Actor") != 0) continue;
-            char cn[64]; obj_name(obj_class(o), cn, sizeof cn);
-            if (strcmp(cn, "Class") == 0) actor = o;
+        for (int attempt = 0; attempt < 90 && !actor; attempt++) {
+            g_num_elements = rd32(arr + 0x10 + 0x14);
+            for (int32_t i = 0; i < g_num_elements && !actor; i++) {
+                uint8_t *o = get_object(i);
+                if (!o) continue;
+                obj_name(o, nm, sizeof nm);
+                if (strcmp(nm, "Actor") != 0) continue;
+                char cn[64]; obj_name(obj_class(o), cn, sizeof cn);
+                if (strcmp(cn, "Class") == 0) actor = o;
+            }
+            if (!actor) Sleep(1000);
         }
         if (!actor) { logf_("Actor class not found"); return 1; }
         detect_ffield_layout(actor);
     }
     analyze_gameengine();
     {   char sp[MAX_PATH]; snprintf(sp, sizeof sp, "%s\\scan.txt", g_dir); if (GetFileAttributesA(sp) != INVALID_FILE_ATTRIBUTES) { scan_anims(); return 0; } }
-    install_tick_hook();
+    for (int attempt = 0; attempt < 90 && !g_orig_tick; attempt++) {     /* the GameEngine object exists a little after the object array */
+        install_tick_hook();
+        if (!g_orig_tick) Sleep(1000);
+    }
     logf_("==== N1 done, the hero is resolved on the game thread when a save is loaded");
     return 0;
 }
