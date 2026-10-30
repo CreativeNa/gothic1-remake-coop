@@ -72,6 +72,9 @@ static int class_info(CoreAPI *a, uint8_t *cls, int *off_owner)
     return v;
 }
 
+/* the hero's "arrow" socket hangs on an IK helper bone, which the pose module leaves in the reference pose (the arrow ended up on the puppet's back): use the right-hand socket instead */
+static const char *puppet_socket(const char *sock) { return strcmp(sock, "arrow") == 0 ? "weapon_r" : sock; }
+
 /* collect the hero's attached item visuals into "W=<weapon>;V=e1&e2..." with e = package,class,socket,arrows */
 static void describe_local(CoreAPI *a)
 {
@@ -189,7 +192,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
             int wanted = 0;                                   /* is this visual's current socket still wanted by another entry? */
             for (int j = 0; j < ne; j++) { char kj[600]; entry_key(ents[j], kj, sizeof kj); if (strcmp(kj, E.pv[i].key) == 0) wanted = 1; }
             if (wanted) continue;
-            int ok = a->attach_to_puppet(E.pv[i].actor, sock);
+            int ok = a->attach_to_puppet(E.pv[i].actor, puppet_socket(sock));
             a->log("E re-attach %s: '%s' -> '%s' ok=%d", E.pv[i].key, E.pv[i].key, sock, ok);
             snprintf(E.pv[i].key, sizeof E.pv[i].key, "%s", key);
             break;
@@ -258,7 +261,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
                 a->call_fn(root, "PrimitiveComponent", "SetCollisionResponseToAllChannels", 1, n3, v3, s3, NULL, 0);
             }
         }
-        int ok = a->attach_to_puppet(actor, sock);
+        int ok = a->attach_to_puppet(actor, puppet_socket(sock));
         a->log("E attach %s to socket '%s' ok=%d", cls, sock, ok);
         E.pv[slot].actor = actor; snprintf(E.pv[slot].key, sizeof E.pv[slot].key, "%s", key); E.pv[slot].arrows = -2;
     }
