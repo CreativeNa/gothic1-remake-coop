@@ -170,10 +170,12 @@ static void shot_tick(CoreAPI *a)
         if (strstr(act, "Bow") && strstr(act, "Shoot")) fl_launch(a);
     }
     unsigned long now = GetTickCount();
+    {   static unsigned long tt; if (now - tt > 500) { tt = now; const char *tf = "C:/Program Files (x86)/Steam/steamapps/common/Gothic1R-coop/native/build/shoot_test.txt";
+        if (GetFileAttributesA(tf) != INVALID_FILE_ATTRIBUTES) { DeleteFileA(tf); fl_launch(a); } } }          /* test trigger: create build\shoot_test.txt */
     for (int i = 0; i < NFLY; i++) {
         if (!FL[i].state) continue;
         if (!FL[i].actor || !a->obj_alive(FL[i].actor, NULL)) { memset(&FL[i], 0, sizeof FL[i]); continue; }
-        if (FL[i].state == 2) { if (now - FL[i].t_stuck > 5000) fl_free(a, i); continue; }
+        if (FL[i].state == 2) { if (now - FL[i].t_stuck > 25000) fl_free(a, i); continue; }
         double dt = (now - FL[i].t_last) / 1000.0; if (dt > 0.1) dt = 0.1; FL[i].t_last = now;
         FL[i].v[2] -= 1500.0 * dt;
         for (int k = 0; k < 3; k++) FL[i].p[k] += FL[i].v[k] * dt;
@@ -184,6 +186,8 @@ static void shot_tick(CoreAPI *a)
         a->call_fn(FL[i].actor, "Actor", "K2_SetActorLocation", 3, nl, vl, sl, NULL, 0);
         const char *nr[2] = { "NewRotation", "bTeleportPhysics" }; const void *vr[2] = { rot, &tp }; int sr[2] = { 24, 1 };
         a->call_fn(FL[i].actor, "Actor", "K2_SetActorRotation", 2, nr, vr, sr, NULL, 0);
+        if (now - FL[i].t_last < 5 && FL[i].state == 1) { static int dbg; if (dbg < 6) { dbg++; double rb[3] = {0,0,0}; vec_of(a, FL[i].actor, "Actor", "K2_GetActorLocation", rb);
+            a->log("E arrow dbg: want %.0f %.0f %.0f got %.0f %.0f %.0f hidden=%d", FL[i].p[0], FL[i].p[1], FL[i].p[2], rb[0], rb[1], rb[2], a->read_bool(FL[i].actor, "bHidden")); } }
         if (FL[i].p[2] <= FL[i].z_ground) { FL[i].state = 2; FL[i].t_stuck = now; }
     }
 }
