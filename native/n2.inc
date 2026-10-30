@@ -736,6 +736,16 @@ static void module_poll(struct ModSlot *m)
 
 static void module_run(int always)
 {
+    if (!always) {                                          /* debug switch: build\modules_off.txt keeps the puppet actor but runs none of the puppet modules (pose, equip, anim) */
+        static unsigned long chk; static int off; unsigned long now = GetTickCount();
+        if (now - chk > 1000) {
+            chk = now;
+            char mp[MAX_PATH]; snprintf(mp, sizeof mp, "%s\\modules_off.txt", g_dir);
+            int v = GetFileAttributesA(mp) != INVALID_FILE_ATTRIBUTES;
+            if (v != off) { off = v; logf_("M puppet modules %s (modules_off.txt)", v ? "OFF" : "ON"); }
+        }
+        if (off) return;
+    }
     if (!g_api.version) api_init();
     g_api.have_remote = T.have_remote;
     g_api.speed = T.rspd_valid ? T.rspd : T.speed; g_api.vz = T.rspd_valid ? T.rvz : T.vz; g_api.movemode = T.rmm;
