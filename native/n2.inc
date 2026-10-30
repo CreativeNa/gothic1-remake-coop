@@ -469,6 +469,10 @@ static uint8_t *spawn_actor_w(uint8_t *cls)
     pset(&T.begin_spawn, b, "ActorClass", &cls, 8);
     pset(&T.begin_spawn, b, "SpawnTransform", &tr, sizeof tr);
     pset(&T.begin_spawn, b, "CollisionHandlingOverride", &col, 1);
+    {   /* the bow visual faults in its construction (near-null read, FinishSpawningActor) without an owner: give it the hero as owner */
+        char cn[160]; obj_name(cls, cn, sizeof cn);
+        if (strstr(cn, "Bow")) { uint8_t *own = T.hero; pset(&T.begin_spawn, b, "Owner", &own, 8); }
+    }
     pcall(T.gs_cdo, &T.begin_spawn, b);
     void *rv = pget(&T.begin_spawn, b, "ReturnValue");
     uint8_t *actor = rv ? *(uint8_t **)rv : NULL;
