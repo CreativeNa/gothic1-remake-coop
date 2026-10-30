@@ -1,0 +1,6 @@
+# console commands run once per world when the hero exists (medium profile for two copies on one GPU)
+r.ScreenPercentage 80
+sg.ShadowQuality 2
+sg.PostProcessQuality 2
+sg.EffectsQuality 2
+sg.TextureQuality 2

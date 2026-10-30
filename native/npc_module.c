@@ -33,7 +33,7 @@ typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long las
 
 static struct {
     Known known[2048]; int nknown; unsigned long last_scan, last_send, last_stat;
-    struct { uint8_t *cls; int v; } cc[256]; int ncc;
+    struct { uint8_t *cls; int v; } cc[1024]; int ncc; int scan_pos, scanning, scan_n; Known tmp[2048]; int ntmp;
     Mirror m[MAXN]; int nm; int last_seq;
     int role, off; int off_vel; unsigned long t_prev;
     int n_sent, n_applied, n_missing;
@@ -57,28 +57,39 @@ static uint8_t *ptr_prop(CoreAPI *a, uint8_t *obj, const char *name)
 
 static int is_character_class(CoreAPI *a, uint8_t *cls)
 {
-    for (int i = 0; i < N.ncc; i++) if (N.cc[i].cls == cls) return N.cc[i].v;
-    int v = 0; char nm[96]; uint8_t *c = cls;
-    for (int d = 0; c && d < 14; d++) {
-        a->obj_name(c, nm, sizeof nm);
-        if (strcmp(nm, "AIAgentCharacter") == 0) { v = 1; break; }
-        uint8_t *sup = NULL; a->read_mem(c + 0x40, &sup, 8); c = sup;
+    unsigned h = (unsigned)(((uintptr_t)cls >> 4) * 2654435761u) & 1023;
+    for (int p = 0; p < 8; p++) {
+        unsigned i = (h + p) & 1023;
+        if (N.cc[i].cls == cls) return N.cc[i].v;
+        if (!N.cc[i].cls) {
+            int v = 0; char nm[96]; uint8_t *c = cls;
+            for (int d = 0; c && d < 14; d++) {
+                a->obj_name(c, nm, sizeof nm);
+                if (strcmp(nm, "AIAgentCharacter") == 0) { v = 1; break; }
+                uint8_t *sup = NULL; a->read_mem(c + 0x40, &sup, 8); c = sup;
+            }
+            N.cc[i].cls = cls; N.cc[i].v = v; return v;
+        }
     }
-    if (N.ncc < 256) { N.cc[N.ncc].cls = cls; N.cc[N.ncc].v = v; N.ncc++; }
-    return v;
+    return 0;
 }
 
-static void rescan(CoreAPI *a)
+/* the object array has ~450000 entries: scan it in slices over many frames (one slice per call) instead of one long frame every few seconds */
+static void rescan_slice(CoreAPI *a)
 {
-    N.nknown = 0; char nm[200];
+    char nm[200];
     int n = a->num_objects();
-    for (int i = 0; i < n && N.nknown < 2048; i++) {
+    if (!N.scanning) { N.scanning = 1; N.scan_pos = 0; N.ntmp = 0; }
+    int end = N.scan_pos + 25000; if (end > n) end = n;
+    for (int i = N.scan_pos; i < end && N.ntmp < 2048; i++) {
         uint8_t *o = a->object_at(i); if (!o) continue;
         uint8_t *cls = a->obj_class(o); if (!cls || !is_character_class(a, cls)) continue;
         a->obj_name(o, nm, sizeof nm); if (strncmp(nm, "Default__", 9) == 0) continue;
         if (a->read_bool(o, "bActorIsBeingDestroyed") == 1) continue;
-        N.known[N.nknown].actor = o; N.known[N.nknown].id = fnv(nm); N.nknown++;
+        N.tmp[N.ntmp].actor = o; N.tmp[N.ntmp].id = fnv(nm); N.ntmp++;
     }
+    N.scan_pos = end;
+    if (end >= n || N.ntmp >= 2048) { memcpy(N.known, N.tmp, (size_t)N.ntmp * sizeof(Known)); N.nknown = N.ntmp; N.scanning = 0; N.last_scan = GetTickCount(); }
 }
 
 static int loc_of(CoreAPI *a, uint8_t *o, double *v) { double r[3] = { 0, 0, 0 }; if (!a->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, r, 24)) return 0; v[0] = r[0]; v[1] = r[1]; v[2] = r[2]; return 1; }
@@ -444,7 +455,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
         N.off = off; N.role = role_of();
     }
     if (N.off || !a->have_remote || !a->hero) return;
-    if (!N.last_scan || now - N.last_scan > 3000) { N.last_scan = now; rescan(a); }
+    if (N.scanning || !N.last_scan || now - N.last_scan > 4000) rescan_slice(a);
     if (N.role == 1) host_tick(a, now); else guest_tick(a, now);
     if (now - N.last_stat > 5000) {
         N.last_stat = now;

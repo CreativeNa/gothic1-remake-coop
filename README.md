@@ -76,6 +76,10 @@ The DLL only accepts packets from that address. LAN or a VPN (Radmin VPN, ZeroTi
 
 Set up a **copy** of the game in a separate folder (`tools\setup_test.ps1`) so the real installation is never touched. Debug switches (files in `native\build\`): `pose_off.txt`, `pose_mode.txt`, `pose_skip.txt`, `equip_off.txt`, `try_clip.txt`.
 
+### Performance with two copies
+
+Copy `tools\couchlink\perf_cmds.example.txt` to `nativeuild\perf_cmds.txt`: its console commands (resolution scale, shadow / effects / texture quality) run in every copy once its hero exists. The window that is not in the foreground is also limited to 30 fps (`t.MaxFPS 30`); `nativeuild\perf_nocap.txt` switches that off.
+
 ## Development tools
 
 `tools\dev.ps1` is the single entry point (header of the file lists everything):
