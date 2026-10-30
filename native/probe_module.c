@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include "coreapi.h"
+#pragma comment(lib, "user32.lib")
 
 #define OUTCAP 120000
 static char *g_out; static int g_olen;
@@ -19,6 +20,7 @@ static char g_dir[MAX_PATH];
 static unsigned long g_last_poll; static char g_last_id[64];
 static struct { char name[40]; uint8_t *ptr; } g_alias[32]; static int g_nalias;
 static CoreAPI *A;
+static struct { LARGE_INTEGER last, freq; double acc; int frames; double worst; double fps, worst_ms; int fg; unsigned long log_t; } F;   /* see frame_stats */
 
 static void P(const char *fmt, ...)
 {
@@ -161,6 +163,7 @@ static void cmd_help(void)
     P("  call <ptr> <Outer> <Function> [Param=type:value ...]   types: i int, f float, d double, b bool, p pointer, n name, v3 x,y,z");
     P("  cc <console command>           KismetSystemLibrary.ExecuteConsoleCommand in the current world");
     P("  frames                          engine frame counter and object count");
+    P("  purge <classSub> [max]         destroy actors whose class contains the text, that are not CDOs and have NO Owner (leftovers of failed spawns)");
 }
 
 static void run_command(char *line)
@@ -173,6 +176,7 @@ static void run_command(char *line)
 
     if (!strcmp(c, "help")) { cmd_help(); return; }
     if (!strcmp(c, "echo")) { char b[300] = ""; for (int i = 1; i < nt; i++) { strcat(b, tok[i]); strcat(b, " "); } P("%s", b); return; }
+    if (!strcmp(c, "fps")) { P("fps %.1f, worst frame %.0f ms, window %s (last 2 s)", F.fps, F.worst_ms, F.fg ? "ACTIVE" : "background"); return; }
     if (!strcmp(c, "frames")) { P("objects=%d hero=%p puppet=%p have_remote=%d", A->num_objects(), A->hero, A->puppet, A->have_remote); return; }
     if (!strcmp(c, "aliases")) { for (int i = 0; i < g_nalias; i++) P("  $%s = %p", g_alias[i].name, g_alias[i].ptr); return; }
     if (!strcmp(c, "alias") && nt >= 3) {
@@ -185,6 +189,42 @@ static void run_command(char *line)
     if (!strcmp(c, "find") && nt >= 3) {
         uint8_t *o = A->find_object(strcmp(tok[1], "*") ? tok[1] : NULL, tok[2], NULL);
         if (!o) P("not found"); else { char cn[96] = ""; A->obj_name(A->obj_class(o), cn, sizeof cn); P("%p %s (%s)", o, tok[2], cn); }
+        return;
+    }
+    if (!strcmp(c, "purge") && nt >= 2) {
+        int max = nt > 2 ? atoi(tok[2]) : 1000, done = 0, skipped = 0, hidden = 0;
+        int n = A->num_objects(); char nm[160], cn[96];
+        for (int i = 0; i < n && done + hidden < max; i++) {
+            uint8_t *o = A->object_at(i); if (!o) continue;
+            A->obj_name(A->obj_class(o), cn, sizeof cn);
+            if (!ci_has(cn, tok[1])) continue;
+            A->obj_name(o, nm, sizeof nm);
+            if (!strncmp(nm, "Default__", 9)) continue;
+            struct InfoCtx ic = { "Owner", "", 0, 0, 0 };
+            A->list_members(A->obj_class(o), info_cb, &ic);
+            if (!ic.found) { skipped++; continue; }                     /* not an actor */
+            uint8_t *owner = NULL; A->read_mem(o + ic.off, &owner, 8);
+            if (owner) { skipped++; continue; }                         /* has an owner: a real one (e.g. the hero's own bow) */
+            if (A->read_bool(o, "bActorIsBeingDestroyed") == 1) {        /* stuck half-destroyed actor: still rendered. Hide it, switch its collision off and destroy the root component */
+                uint8_t hid = 1, off = 0, prop = 1; uint8_t *root = NULL;
+                int orr = A->find_prop_offset(A->obj_class(o), "RootComponent"); if (orr >= 0) A->read_mem(o + orr, &root, 8);
+                const char *n1[1] = { "bNewHidden" }; const void *v1[1] = { &hid }; int s1[1] = { 1 };
+                A->call_fn(o, "Actor", "SetActorHiddenInGame", 1, n1, v1, s1, NULL, 0);
+                const char *n2[1] = { "bNewActorEnableCollision" }; const void *v2[1] = { &off }; int s2[1] = { 1 };
+                A->call_fn(o, "Actor", "SetActorEnableCollision", 1, n2, v2, s2, NULL, 0);
+                if (root && readable(root)) {
+                    const char *n3[2] = { "bNewVisibility", "bPropagateToChildren" }; const void *v3[2] = { &off, &prop }; int s3[2] = { 1, 1 };
+                    A->call_fn(root, "SceneComponent", "SetVisibility", 2, n3, v3, s3, NULL, 0);
+                    const char *n4[1] = { "Object" }; const void *v4[1] = { &root }; int s4[1] = { 8 };
+                    A->call_fn(root, "ActorComponent", "K2_DestroyComponent", 1, n4, v4, s4, NULL, 0);
+                }
+                hidden++; continue;
+            }
+            const char *nn[1] = { NULL };
+            A->call_fn(o, "Actor", "K2_DestroyActor", 0, nn, NULL, NULL, NULL, 0);
+            done++;
+        }
+        P("destroyed %d, hid stuck half-destroyed %d, kept %d (with an owner)", done, hidden, skipped);
         return;
     }
     if (!strcmp(c, "findall") && nt >= 2) {
@@ -324,9 +364,26 @@ static void poll(void)
     if (o) { fwrite(g_out, 1, (size_t)g_olen, o); fclose(o); }
 }
 
+/* frame statistics of this game process: engine ticks per second and the worst frame, with a flag whether its window is the foreground one */
+static void frame_stats(void)
+{
+    LARGE_INTEGER t; QueryPerformanceCounter(&t);
+    if (!F.freq.QuadPart) { QueryPerformanceFrequency(&F.freq); F.last = t; return; }
+    double dt = (double)(t.QuadPart - F.last.QuadPart) / (double)F.freq.QuadPart; F.last = t;
+    F.acc += dt; F.frames++; if (dt > F.worst) F.worst = dt;
+    if (F.acc >= 2.0) {
+        F.fps = F.frames / F.acc; F.worst_ms = F.worst * 1000.0;
+        DWORD fpid = 0; GetWindowThreadProcessId(GetForegroundWindow(), &fpid); F.fg = fpid == GetCurrentProcessId();
+        F.acc = 0; F.frames = 0; F.worst = 0;
+        unsigned long now = GetTickCount();
+        if (now - F.log_t > 10000) { F.log_t = now; A->log("PR fps %.1f worst frame %.0f ms, window %s", F.fps, F.worst_ms, F.fg ? "ACTIVE" : "background"); }
+    }
+}
+
 __declspec(dllexport) void mod_update(CoreAPI *a)
 {
     A = a;
+    frame_stats();
     unsigned long now = GetTickCount();
     if (now - g_last_poll < 250) return;
     g_last_poll = now;

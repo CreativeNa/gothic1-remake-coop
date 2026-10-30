@@ -21,6 +21,7 @@ static struct {
     struct { char key[300]; uint8_t *actor; int arrows; } pv[MAXV];
     unsigned long last_scan, last_try, last_arrows;
     int last_weapon, gen, off; unsigned long last_off;
+    struct { char key[300]; int n; } fail[8]; int nfail;            /* visuals whose spawn failed (a half-built actor stays in the world each time) */
     char local[900];
     char seen[16][300]; int nseen;
     struct { uint8_t *cls; int v; int off_owner; } cc[512]; int ncc;
@@ -178,6 +179,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
             }
             continue;
         }
+        { int given_up = 0; for (int i = 0; i < E.nfail; i++) if (strcmp(E.fail[i].key, key) == 0 && E.fail[i].n >= 2) given_up = 1; if (given_up) continue; }
         if (now - E.last_try < 1000) continue;
         E.last_try = now;
         for (int i = 0; i < MAXV && slot < 0; i++) if (!E.pv[i].actor) slot = i;
@@ -188,7 +190,13 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
         if (!uclass) continue;
         uint8_t *actor = a->spawn_actor(uclass);
         a->log("E spawned %s %p", cls, actor);
-        if (!actor) { E.last_try = now + 4000; continue; }      /* a failed spawn is retried only after ~5 s */
+        if (!actor) {                                           /* a failed spawn leaves a half-built actor behind in the world: after two failures stop trying this visual */
+            E.last_try = now + 4000;
+            int f = -1; for (int i = 0; i < E.nfail; i++) if (strcmp(E.fail[i].key, key) == 0) f = i;
+            if (f < 0 && E.nfail < 8) { f = E.nfail++; snprintf(E.fail[f].key, sizeof E.fail[f].key, "%s", key); E.fail[f].n = 0; }
+            if (f >= 0 && ++E.fail[f].n >= 2) a->log("E giving up on %s (spawn keeps failing)", cls);
+            continue;
+        }
         int ok = a->attach_to_puppet(actor, sock);
         a->log("E attach %s to socket '%s' ok=%d", cls, sock, ok);
         E.pv[slot].actor = actor; snprintf(E.pv[slot].key, sizeof E.pv[slot].key, "%s", key); E.pv[slot].arrows = -2;

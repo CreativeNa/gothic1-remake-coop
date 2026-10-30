@@ -475,7 +475,11 @@ static uint8_t *spawn_actor_w(uint8_t *cls)
     pset(&T.finish_spawn, b2, "SpawnTransform", &tr, sizeof tr);
     int okf = pcall(T.gs_cdo, &T.finish_spawn, b2);
     _aligned_free(b2);
-    if (!okf) { logf_("spawn_actor: FinishSpawningActor failed, actor %p dropped", actor); return NULL; }
+    if (!okf) {                                                         /* the half-built actor would stay in the world (a trail of items): remove it */
+        logf_("spawn_actor: FinishSpawningActor failed, destroying actor %p", actor);
+        destroy_actor_w(actor);
+        return NULL;
+    }
     root_obj(actor);
     return actor;
 }
