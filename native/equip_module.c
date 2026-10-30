@@ -156,6 +156,12 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
                 if (!E.pv[i].actor || !a->obj_alive(E.pv[i].actor, NULL)) continue;
                 uint8_t hid = (uint8_t)away; const char *n1[1] = { "bNewHidden" }; const void *v1[1] = { &hid }; int s1[1] = { 1 };
                 a->call_fn(E.pv[i].actor, "Actor", "SetActorHiddenInGame", 1, n1, v1, s1, NULL, 0);
+                uint8_t *root = ptr_prop(a, E.pv[i].actor, "RootComponent");               /* the item may un-hide its actor itself: hide its components (and the children, e.g. the arrows) too */
+                if (root) {
+                    uint8_t vis = (uint8_t)!away, prop = 1;
+                    const char *n2[2] = { "bNewVisibility", "bPropagateToChildren" }; const void *v2[2] = { &vis, &prop }; int s2[2] = { 1, 1 };
+                    a->call_fn(root, "SceneComponent", "SetVisibility", 2, n2, v2, s2, NULL, 0);
+                }
             }
         }
     }
