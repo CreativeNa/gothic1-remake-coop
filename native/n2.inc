@@ -67,10 +67,13 @@ static int pset(FnInfo *fi, uint8_t *buf, const char *name, const void *data, in
     return 1;
 }
 static void *pget(FnInfo *fi, uint8_t *buf, const char *name) { ParamInfo *p = pfind(fi, name); return p ? buf + p->off : NULL; }
+/* what our code is doing right now (single game thread): the crash recorder prints it, so a crash tells whether one of our calls was on the stack */
+static volatile const char *g_in_call, *g_in_mod; static volatile DWORD g_game_tid;
 static int pcall(void *self, FnInfo *fi, uint8_t *buf)
 {
-    __try { g_pe(self, fi->fn, buf); return 1; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { logf_("EXCEPTION 0x%lx in ProcessEvent(%s)", GetExceptionCode(), fi->name); return 0; }
+    g_in_call = fi->name;
+    __try { g_pe(self, fi->fn, buf); g_in_call = NULL; return 1; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { g_in_call = NULL; logf_("EXCEPTION 0x%lx in ProcessEvent(%s)", GetExceptionCode(), fi->name); return 0; }
 }
 
 typedef struct { double x, y, z; } Vec3;
@@ -749,7 +752,9 @@ static void module_run(int always)
             m->need_init = 0;
             __try { m->init(&g_api); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("M exception in %s mod_init, module disabled", m->name); m->update = NULL; continue; }
         }
+        g_in_mod = m->name;
         __try { m->update(&g_api); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("M exception 0x%lx in %s mod_update, disabled until reload", GetExceptionCode(), m->name); m->update = NULL; }
+        g_in_mod = NULL;
     }
 }
 
@@ -1153,6 +1158,7 @@ static void frame_work(void)
 static void hk_tick(void *self, float dt, unsigned char idle)
 {
     g_orig_tick(self, dt, idle);
+    g_game_tid = GetCurrentThreadId();
     __try { frame_work(); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("EXCEPTION 0x%lx in frame_work step %d", GetExceptionCode(), T.step); T.step = 99; }
     __try { module_always(); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("EXCEPTION 0x%lx in module_always", GetExceptionCode()); }
 }

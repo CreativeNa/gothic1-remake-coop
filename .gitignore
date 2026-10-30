@@ -29,3 +29,6 @@ scan.txt
 *.webp
 !docs/img/*.png
 !docs/img/*.webp
+
+# Files taken out of the game copy (backups of third-party mods)
+removed-from-game/

@@ -203,12 +203,19 @@ static void where_(const void *addr, char *out, int cap)
 static LONG CALLBACK av_recorder(EXCEPTION_POINTERS *ep)
 {
     static volatile LONG count;
-    if (ep->ExceptionRecord->ExceptionCode != 0xC0000005 || InterlockedIncrement(&count) > 200) return EXCEPTION_CONTINUE_SEARCH;
+    if (ep->ExceptionRecord->ExceptionCode != 0xC0000005 || InterlockedIncrement(&count) > 600) return EXCEPTION_CONTINUE_SEARCH;
+    /* every distinct fault address is logged at most 3 times: a third-party mod that catches the same fault again and again (fyryNy_itemlocator) must not eat the budget */
+    static struct { void *rip; int n; } seen[128]; static int nseen;
+    void *rip = ep->ExceptionRecord->ExceptionAddress; int slot = -1;
+    for (int i = 0; i < nseen; i++) if (seen[i].rip == rip) slot = i;
+    if (slot < 0 && nseen < 128) { slot = nseen++; seen[slot].rip = rip; seen[slot].n = 0; }
+    if (slot >= 0 && ++seen[slot].n > 3) return EXCEPTION_CONTINUE_SEARCH;
     char w[256];
     where_(ep->ExceptionRecord->ExceptionAddress, w, sizeof w);
     ULONG_PTR kind = ep->ExceptionRecord->NumberParameters > 0 ? ep->ExceptionRecord->ExceptionInformation[0] : 9;
     ULONG_PTR addr = ep->ExceptionRecord->NumberParameters > 1 ? ep->ExceptionRecord->ExceptionInformation[1] : 0;
-    logf_("AV at %s: %s address 0x%llx, thread %lu", w, kind == 0 ? "reading" : (kind == 1 ? "writing" : "executing"), (unsigned long long)addr, GetCurrentThreadId());
+    logf_("AV at %s: %s address 0x%llx, thread %lu (%s thread)", w, kind == 0 ? "reading" : (kind == 1 ? "writing" : "executing"), (unsigned long long)addr, GetCurrentThreadId(), GetCurrentThreadId() == g_game_tid ? "GAME" : "other");
+    logf_("AV   our code at that moment: call=%s module=%s", g_in_call ? (const char *)g_in_call : "none", g_in_mod ? (const char *)g_in_mod : "none");
     uint64_t *sp = (uint64_t *)ep->ContextRecord->Rsp; int shown = 0;
     for (int i = 0; i < 160 && shown < 12; i++) {
         uint64_t v = 0; if (!safe_read(sp + i, &v, 8)) break;
