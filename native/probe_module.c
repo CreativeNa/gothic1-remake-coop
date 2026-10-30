@@ -558,6 +558,16 @@ static int console_cmd(const char *text)
     const char *names[3] = { "WorldContextObject", "Command", "SpecificPlayer" }; const void *vals[3] = { &world, &fs, nullp }; int sizes[3] = { 8, 16, 8 };
     return A->call_fn(o, "KismetSystemLibrary", "ExecuteConsoleCommand", 3, names, vals, sizes, NULL, 0);
 }
+/* is the window in the foreground another copy of this game? (only then is this copy the "idle" one; with the focus on any other program both copies run free) */
+static int other_game_has_focus(void)
+{
+    DWORD pid = 0; GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    if (!pid || pid == GetCurrentProcessId()) return 0;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid); if (!h) return 0;
+    char img[MAX_PATH] = ""; DWORD n = sizeof img; int is = 0;
+    if (QueryFullProcessImageNameA(h, 0, img, &n)) { const char *b = strrchr(img, '\\'); is = b && _stricmp(b + 1, "G1R-Win64-Shipping.exe") == 0; }
+    CloseHandle(h); return is;
+}
 static void perf_tick(void)
 {
     static unsigned long t; static uint8_t *last_hero; static int cap = -1; static unsigned long cap_t;
@@ -571,8 +581,8 @@ static void perf_tick(void)
         if (f) { char line[300]; int n = 0; while (fgets(line, sizeof line, f)) { char *e = line + strlen(line); while (e > line && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0; if (!line[0] || line[0] == '#') continue; console_cmd(line); n++; } fclose(f); A->log("PR perf: ran %d console commands from perf_cmds.txt", n); }
     }
     char np[MAX_PATH]; snprintf(np, sizeof np, "%s\\perf_nocap.txt", g_dir);
-    int want = GetFileAttributesA(np) != INVALID_FILE_ATTRIBUTES ? 0 : (F.fg ? 0 : 1);   /* 1 = limited */
-    if (want != cap && now - cap_t > 2000) { cap = want; cap_t = now; console_cmd(want ? "t.MaxFPS 30" : "t.MaxFPS 0"); A->log("PR perf: window %s, t.MaxFPS %s", F.fg ? "ACTIVE" : "background", want ? "30" : "0 (unlimited)"); }
+    int want = GetFileAttributesA(np) != INVALID_FILE_ATTRIBUTES ? 0 : (other_game_has_focus() ? 1 : 0);   /* 1 = limited */
+    if (want != cap && now - cap_t > 3000) { cap = want; cap_t = now; console_cmd(want ? "t.MaxFPS 30" : "t.MaxFPS 0"); A->log("PR perf: %s, t.MaxFPS %s", want ? "the other copy has the focus" : "this copy has the focus or none of them", want ? "30" : "0 (unlimited)"); }
 }
 
 /* frame statistics of this game process: engine ticks per second and the worst frame, with a flag whether its window is the foreground one */
