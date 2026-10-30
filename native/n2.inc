@@ -386,8 +386,9 @@ static struct ModSlot {
     const char *name;
     HMODULE h; ModUpdate_t update; ModShutdown_t shutdown; ModInit_t init;
     FILETIME mtime; int serial; int need_init; char loaded_path[MAX_PATH];
-} g_mods[MAX_MODS] = { { "anim" }, { "equip" }, { "pose" } };
-static int g_nmods = 3;
+    int always;                 /* 1: called every engine tick (menu, loading screens, no friend needed); 0: only while the puppet exists */
+} g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "probe", .always = 1 } };
+static int g_nmods = 4;
 
 static double seq_length_w(uint8_t *seq)
 {
@@ -583,6 +584,42 @@ static int call_fn_w(uint8_t *obj, const char *outer, const char *fn, int n, con
     return ok;
 }
 
+/* ---- live recon helpers (probe module) ---- */
+typedef void (*MemberCb)(const char *kind, const char *sname, const char *name, const char *type, int off, int size, void *ud);
+static void list_members_w(uint8_t *ustruct, MemberCb cb, void *ud)
+{
+    char sn[96], nm[160], tn[96];
+    int depth = 0;
+    for (uint8_t *st = ustruct; st && depth < 12; st = (uint8_t *)rd64(st + 0x40), depth++) {
+        obj_name(st, sn, sizeof sn);
+        int guard = 0;
+        for (uint8_t *p = (uint8_t *)rd64(st + 0x50); p && guard < 4000; p = (uint8_t *)rd64(p + g_off_next), guard++) {
+            fname_str(p + g_off_name, nm, sizeof nm);
+            uint8_t *fc = (uint8_t *)rd64(p + 8);
+            if (fc) fname_str(fc, tn, sizeof tn); else strcpy(tn, "?");
+            cb("prop", sn, nm, tn, rd32(p + g_off_offint), rd32(p + g_off_name + 0x14), ud);
+        }
+        guard = 0;
+        for (uint8_t *f = (uint8_t *)rd64(st + 0x48); f && guard < 4000; f = (uint8_t *)rd64(f + 0x28), guard++) {   /* UStruct::Children (UField chain, Next at +0x28) */
+            obj_name(f, nm, sizeof nm);
+            cb("fn", sn, nm, "Function", 0, 0, ud);
+        }
+    }
+}
+static int describe_fn_w(const char *outer, const char *fn, char *out, int cap)
+{
+    out[0] = 0;
+    FnInfo *fi = fcache_get(outer, fn);
+    if (!fi || !fi->fn) return 0;
+    for (int i = 0; i < fi->n && (int)strlen(out) + 80 < cap; i++)
+        sprintf(out + strlen(out), "%s%s@%d/%d%s", i ? " " : "", fi->p[i].name, fi->p[i].off, fi->p[i].size, (fi->p[i].flags & 0x400) ? "(out)" : "");   /* 0x400 = CPF_OutParm */
+    return 1;
+}
+static int write_mem_w(void *dst, const void *src, size_t n)
+{
+    __try { memcpy(dst, src, n); return 1; } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
 /* ---- binary pose channel ---- */
 #define BLOB_MAX 9000
 #define BLOB_CHUNK 1400
@@ -657,6 +694,9 @@ static void api_init(void)
     g_api.set_local_blob = set_local_blob_w;
     g_api.set_attach_target = set_attach_target_w;
     g_api.remote_blob = g_rblob;
+    g_api.list_members = list_members_w;
+    g_api.describe_fn = describe_fn_w;
+    g_api.write_mem = write_mem_w;
     g_api.action = "-"; g_api.action_pkg = "-";
 }
 
@@ -686,7 +726,7 @@ static void module_poll(struct ModSlot *m)
     logf_("M module '%s' loaded: %s", m->name, dst);
 }
 
-static void module_frame(void)
+static void module_run(int always)
 {
     if (!g_api.version) api_init();
     g_api.have_remote = T.have_remote;
@@ -697,6 +737,7 @@ static void module_frame(void)
     g_api.remote_blob_len = g_rblob_len; g_api.remote_blob_seq = g_rblob_seq; g_api.attach_gen = g_attach_gen;
     for (int i = 0; i < g_nmods; i++) {
         struct ModSlot *m = &g_mods[i];
+        if (m->always != always) continue;
         if (T.frame % 30 == (i * 7) % 30) module_poll(m);
         if (!m->h || !m->update) continue;
         if (m->need_init) {
@@ -706,6 +747,9 @@ static void module_frame(void)
         __try { m->update(&g_api); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("M exception 0x%lx in %s mod_update, disabled until reload", GetExceptionCode(), m->name); m->update = NULL; }
     }
 }
+
+static void module_frame(void)  { module_run(0); }     /* modules that need the puppet */
+static void module_always(void)  { module_run(1); }     /* modules that run every tick */
 
 static void frame_work(void)
 {
@@ -719,15 +763,17 @@ static void frame_work(void)
     switch (T.step) {
     case 0: {   /* resolve everything */
         char nm[128];
+        if (T.frame % 60 != 1) return;                                   /* looking for the hero scans every object: once a second is enough (main menu, loading) */
         uint8_t *hc = find_object("BlueprintGeneratedClass", "PlayerCharacterBP_C", NULL);
-        if (!hc) { logf_("N2: hero class not found, retry"); return; }
+        if (!hc) { if (T.frame % 1800 == 1) logf_("N2: hero class not found yet"); return; }
         for (int32_t j = 0; j < g_num_elements; j++) {
             uint8_t *x = get_object(j);
             if (!x || obj_class(x) != hc) continue;
             obj_name(x, nm, sizeof nm);
             if (strncmp(nm, "Default__", 9) != 0) { T.hero = x; T.hero_idx = j; break; }
         }
-        if (!T.hero) { logf_("N2: hero instance not found, retry"); return; }
+        if (!T.hero) { if (T.frame % 1800 == 1) logf_("N2: no hero instance yet (no save loaded)"); return; }
+        logf_("N2: hero instance found at frame %d", T.frame);
         T.hero_class = hc; T.puppet_char = 2;   /* 1 = spawn PlayerCharacterBP_C (the game keeps it hidden), 2 = plain SkeletalMeshActor with the hero's mesh */
         T.skm_class = find_object("Class", "SkeletalMeshActor", "/Script/Engine");
         load_fn("SkeletalMeshComponent", "PlayAnimation", &T.playanim);
@@ -1103,6 +1149,7 @@ static void hk_tick(void *self, float dt, unsigned char idle)
 {
     g_orig_tick(self, dt, idle);
     __try { frame_work(); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("EXCEPTION 0x%lx in frame_work step %d", GetExceptionCode(), T.step); T.step = 99; }
+    __try { module_always(); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("EXCEPTION 0x%lx in module_always", GetExceptionCode()); }
 }
 
 static void install_tick_hook(void)

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define COREAPI_VERSION 7
+#define COREAPI_VERSION 8
 
 typedef struct CoreAPI {
     int version;
@@ -76,6 +76,13 @@ typedef struct CoreAPI {
     /* v7: component that equipment is attached to instead of the puppet's skeletal mesh (NULL = default); attach_gen changes with it */
     void (*set_attach_target)(uint8_t *comp);
     int attach_gen;
+
+    /* v8: live recon helpers for the probe module */
+    /* every property and function of a class and its parents: kind "prop" or "fn", the struct that declares it, name, property type name, offset, size */
+    void (*list_members)(uint8_t *ustruct, void (*cb)(const char *kind, const char *sname, const char *name, const char *type, int off, int size, void *ud), void *ud);
+    /* parameters of a UFunction without calling it, e.g. "NewRate@0/4 ReturnValue@4/1"; returns 0 if the function does not exist */
+    int  (*describe_fn)(const char *outer, const char *fn, char *out, int cap);
+    int  (*write_mem)(void *dst, const void *src, size_t n);                      /* guarded write, 1 = ok */
 } CoreAPI;
 
 /* exports of a module */

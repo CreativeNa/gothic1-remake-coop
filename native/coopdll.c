@@ -235,65 +235,26 @@ static DWORD WINAPI worker(LPVOID arg)
     }
     if (!found) { logf_("could not locate ObjObjects"); return 1; }
 
-    /* pass 1: UClass named PlayerCharacterBP_C (the object whose own name matches) */
+    /* The tick hook only needs the GameEngine object, which exists from the start. The hero is looked up on the game thread
+     * (frame_work step 0) once a save is loaded, so modules (probe, auto-load) already work in the main menu. */
     char nm[256];
-    uint8_t *heroClass = NULL;
-    for (int attempt = 0; attempt < 900 && !heroClass; attempt++) {     /* wait up to 15 min for a save to be loaded */
-        g_num_elements = rd32(arr + 0x10 + 0x14);
-        for (int32_t i = 0; i < g_num_elements; i++) {
+    {   /* property layout (FField offsets) is detected on the Actor class; it needs no hero */
+        uint8_t *actor = NULL;
+        for (int32_t i = 0; i < g_num_elements && !actor; i++) {
             uint8_t *o = get_object(i);
             if (!o) continue;
             obj_name(o, nm, sizeof nm);
-            if (strcmp(nm, "PlayerCharacterBP_C") == 0) { heroClass = o; logf_("class PlayerCharacterBP_C @%p (index %d)", o, i); break; }
+            if (strcmp(nm, "Actor") != 0) continue;
+            char cn[64]; obj_name(obj_class(o), cn, sizeof cn);
+            if (strcmp(cn, "Class") == 0) actor = o;
         }
-        if (heroClass) {          /* the class exists from startup; wait until a real (non-CDO) instance exists, i.e. a save is loaded */
-            int have = 0;
-            for (int32_t j = 0; j < g_num_elements && !have; j++) {
-                uint8_t *x = get_object(j);
-                if (!x || obj_class(x) != heroClass) continue;
-                obj_name(x, nm, sizeof nm);
-                if (strncmp(nm, "Default__", 9) != 0) have = 1;
-            }
-            if (!have) heroClass = NULL;
-        }
-        if (!heroClass) Sleep(1000);
-    }
-    if (!heroClass) { logf_("hero class not found after waiting"); return 1; }
-    /* pass 2: instances of it */
-    uint8_t *hero = NULL;
-    for (int32_t i = 0; i < g_num_elements; i++) {
-        uint8_t *o = get_object(i);
-        if (!o || obj_class(o) != heroClass) continue;
-        obj_name(o, nm, sizeof nm);
-        logf_("instance %s @%p", nm, o);
-        if (strncmp(nm, "Default__", 9) != 0 && !hero) hero = o;
-    }
-    if (!hero) { logf_("no hero instance"); return 1; }
-
-    {   /* find the Actor class by walking supers */
-        uint8_t *c = heroClass; char sn[128];
-        for (int d = 0; c && d < 16; d++) { obj_name(c, sn, sizeof sn); if (strcmp(sn, "Actor") == 0) { detect_ffield_layout(c); break; } c = (uint8_t *)rd64(c + 0x40); }
-    }
-    int off_root = find_prop_offset_v(heroClass, "RootComponent", 1);
-    logf_("RootComponent offset: %d", off_root);
-    if (off_root < 0) return 1;
-    uint8_t *root = (uint8_t *)rd64(hero + off_root);
-    obj_name(root, nm, sizeof nm);
-    logf_("RootComponent -> %p (%s)", root, nm);
-    int off_loc = find_prop_offset(obj_class(root), "RelativeLocation");
-    int off_rot = find_prop_offset(obj_class(root), "RelativeRotation");
-    logf_("RelativeLocation offset %d, RelativeRotation offset %d", off_loc, off_rot);
-    for (int k = 0; k < 2; k++) {
-        double v[3] = {0}, r[3] = {0};
-        if (off_loc >= 0) safe_read(root + off_loc, v, sizeof v);
-        if (off_rot >= 0) safe_read(root + off_rot, r, sizeof r);
-        logf_("hero loc %.1f %.1f %.1f  rot(P,Y,R) %.1f %.1f %.1f", v[0], v[1], v[2], r[0], r[1], r[2]);
-        Sleep(500);
+        if (!actor) { logf_("Actor class not found"); return 1; }
+        detect_ffield_layout(actor);
     }
     analyze_gameengine();
     {   char sp[MAX_PATH]; snprintf(sp, sizeof sp, "%s\\scan.txt", g_dir); if (GetFileAttributesA(sp) != INVALID_FILE_ATTRIBUTES) { scan_anims(); return 0; } }
     install_tick_hook();
-    logf_("==== N1 done, N2 runs on the game thread");
+    logf_("==== N1 done, the hero is resolved on the game thread when a save is loaded");
     return 0;
 }
 

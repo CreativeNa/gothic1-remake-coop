@@ -76,6 +76,20 @@ The DLL only accepts packets from that address. LAN or a VPN (Radmin VPN, ZeroTi
 
 Set up a **copy** of the game in a separate folder (`tools\setup_test.ps1`) so the real installation is never touched. Debug switches (files in `native\build\`): `pose_off.txt`, `pose_mode.txt`, `pose_skip.txt`, `equip_off.txt`, `try_clip.txt`.
 
+## Development tools
+
+`tools\dev.ps1` is the single entry point (header of the file lists everything):
+
+| Command | What it does |
+|---|---|
+| `dev.ps1 build [anim\|equip\|pose\|probe]` | rebuild modules; running games hot-reload them within ~1 s, no restart, no save reload |
+| `dev.ps1 core <n>` | build `coopdll_<n>.dll` (needs a game restart) |
+| `dev.ps1 probe "<cmd>" ...` | run commands in the live game(s): `findall`, `class`, `members`, `get`, `set`, `fn`, `call`, `cc` (console command); `probe help` lists them. Works already in the main menu |
+| `dev.ps1 shots` | screenshot all monitors |
+| `dev.ps1 status` / `dev.ps1 log` | running games, recent problems, newest crash dump decoded (`tools\dmpinfo.py`) |
+
+The `probe` module (`native/probe_module.c`) reads `native\build\probe_cmd.txt` and answers in `probe_out_<pid>.txt`. Rule of thumb: put new game logic into modules, not into the core, so a change never costs a restart.
+
 ## Repository layout
 
 | Path | What |
