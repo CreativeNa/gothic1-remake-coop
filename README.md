@@ -4,9 +4,9 @@ A work-in-progress co-op mod for **Gothic 1 Remake** (Unreal Engine 5.4, Hazelig
 
 > Fan project. Not affiliated with Alkimia Interactive, THQ Nordic or the coop-anything project. No game files are included; you need your own copy of the game.
 >
-> **Status: early prototype.** Two windows on one PC work. Connecting by IP (`tools\join.ps1`) is implemented but not yet tested between two real PCs. Shared NPCs and quests do not exist yet. See [STATUS.md](STATUS.md).
+> **Status: early prototype.** Two windows on one PC work (also launched through CouchLink). Connecting by IP (`tools\join.ps1`) is implemented but not yet tested between two real PCs. Shared NPCs and quests do not exist yet. See [STATUS.md](STATUS.md).
 
-*По-русски:* кооператив-прототип для Gothic 1 Remake. В два запущенных экземпляра игры внедряется DLL; каждый игрок видит другого как куклу героя с его настоящей позой скелета. Пока работает только два окна на одном ПК; игра по интернету, общие NPC и квесты ещё не сделаны.
+*По-русски:* кооператив-прототип для Gothic 1 Remake. В два запущенных экземпляра игры внедряется DLL; каждый игрок видит другого как куклу героя с его настоящей позой скелета. Работает два окна на одном ПК (в том числе через CouchLink); подключение по IP есть, но проверено пока только на одном ПК; общие NPC и квесты ещё не сделаны.
 
 ## What works today
 
@@ -61,6 +61,18 @@ native\build_module.bat [anim|equip|pose]   -> native\build\modules\*.dll  (hot-
 native\build.bat                   -> inject.exe
 tools\play_net.ps1 -Dll coopdll_<suffix>.dll   starts two windows and injects the DLL
 ```
+
+### Connect by IP
+
+```
+tools\join.ps1 -Peer <friend's IP or host name>[:port]     (both players run it with the other player's address)
+```
+
+The DLL only accepts packets from that address. LAN or a VPN (Radmin VPN, ZeroTier, Hamachi) is the easiest; over the internet both sides use each other's public IP at about the same time (UDP hole punching) or forward UDP port 40001. Details are in the header of `tools\join.ps1`. Tested so far only with both copies on one PC.
+
+### Two copies on one PC with CouchLink
+
+[CouchLink](https://github.com/cranebeaker/couchlink) can start one copy of the game per player on its own monitor with its own input. `tools\couchlink\gothic1r-coop-test.json` is a recipe for it (copy it to `%LOCALAPPDATA%\Couchlink\recipes\`, check the `vars` paths inside). For each copy the recipe starts `couchlink_seat.vbs` (hidden window), which finds the copy by its `-CoopSeat=<n>` argument, writes the network config (UDP 40001 <-> 40002 on 127.0.0.1) and injects the newest `coopdll_*.dll`.
 
 Set up a **copy** of the game in a separate folder (`tools\setup_test.ps1`) so the real installation is never touched. Debug switches (files in `native\build\`): `pose_off.txt`, `pose_mode.txt`, `pose_skip.txt`, `equip_off.txt`, `try_clip.txt`.
 

@@ -9,6 +9,8 @@ Last updated: 2026-10-30
 - Full-skeleton pose sync (422 bones, chunked UDP datagrams), forced LOD0, face / armor / IK helper bones left in reference pose.
 - Equipment mirrored on the puppet (quiver with arrow count, bow, sword, food in hand).
 - Hot-reloadable modules (`anim`, `equip`, `pose`) with a small API.
+- Connecting by IP: host names or addresses, packets accepted only from the configured friend (`tools/join.ps1`). Tested on one PC only.
+- CouchLink recipe for two copies on one PC (`tools/couchlink/`); the two players see each other and animations keep working.
 
 ## Known problems
 
@@ -22,7 +24,7 @@ Last updated: 2026-10-30
 
 ## Not started
 
-- Real two-PC test of the direct-IP transport (`tools/join.ps1` exists, verified on loopback only), Steam relay, and bone-pose compression for the internet.
+- Real two-PC test of the direct-IP transport (`tools/join.ps1` exists, verified on loopback only), Steam relay, and bone-pose compression for the internet. Postponed until the one-PC sync is finished.
 - Shared world: NPC positions and health, shared combat, quests, dialogue, inventory, saves.
 - Robustness: hero respawn on level change, late join.
 - Game updates: every update changes the RVAs and needs a new recon pass.

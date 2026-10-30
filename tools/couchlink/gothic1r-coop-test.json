@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "id": "gothic1r-coop-test",
+  "game": "Gothic 1 Remake co-op (test copy)",
+  "match": {
+    "steamAppId": 1297900,
+    "exe": "G1R-Win64-Shipping.exe"
+  },
+  "players": [
+    2,
+    2
+  ],
+  "mode": "instances",
+  "steam": "none",
+  "present": "window",
+  "launch": {
+    "exe": "$GAME\\G1R\\Binaries\\Win64\\G1R-Win64-Shipping.exe",
+    "args": "-windowed -ResX=$WIDTH -ResY=$HEIGHT -WinX=$X -WinY=$Y -no-intro-cinematic -CoopSeat=$SEAT",
+    "env": {},
+    "per_seat_helpers": [
+      {
+        "exe": "C:\\Windows\\System32\\wscript.exe",
+        "args": "//B //Nologo \"$MOD\\couchlink_seat.vbs\" $SEAT",
+        "cwd": "$MOD",
+        "at": "start"
+      }
+    ]
+  },
+  "files": {
+    "copy": [],
+    "link": "none",
+    "saves": []
+  },
+  "registry": [],
+  "locks": [],
+  "input": {
+    "xinput": true,
+    "dinput": false,
+    "rawinput": true
+  },
+  "window": {
+    "borderless": true,
+    "settle_ms": 6000,
+    "wait_ms": 180000
+  },
+  "vars": {
+    "GAME": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\game-test",
+    "MOD": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic1R-coop\\tools\\couchlink"
+  }
+}
