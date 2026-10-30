@@ -121,6 +121,14 @@ static uint8_t *ptr_of(const char *t)
     return (uint8_t *)(uintptr_t)strtoull(t, NULL, 0);
 }
 static int readable(const void *p) { char b; return p && A->read_mem(p, &b, 1); }
+/* readable memory is not enough: a dead object's memory stays mapped, and a function called on it faults INSIDE ProcessEvent, which can leave the game's
+ * internal state (input handling included) damaged. A target must be a live UObject (its InternalIndex points back at it). */
+static int live(const void *p)
+{
+    int idx = -1;
+    if (!readable(p) || ((uintptr_t)p & 7) || !A->read_mem((const uint8_t *)p + 0xC, &idx, 4) || idx < 0 || idx >= A->num_objects()) return 0;
+    return A->object_at(idx) == (uint8_t *)p;
+}
 
 /* ---------- value formatting ---------- */
 static void fmt_value(uint8_t *obj, const char *name, const char *type, int off, int size, char *out, int cap)
@@ -275,7 +283,7 @@ static void run_command(char *line)
                 A->call_fn(o, "Actor", "SetActorHiddenInGame", 1, n1, v1, s1, NULL, 0);
                 const char *n2[1] = { "bNewActorEnableCollision" }; const void *v2[1] = { &off }; int s2[1] = { 1 };
                 A->call_fn(o, "Actor", "SetActorEnableCollision", 1, n2, v2, s2, NULL, 0);
-                if (root && readable(root)) {
+                if (root && live(root)) {
                     const char *n3[2] = { "bNewVisibility", "bPropagateToChildren" }; const void *v3[2] = { &off, &prop }; int s3[2] = { 1, 1 };
                     A->call_fn(root, "SceneComponent", "SetVisibility", 2, n3, v3, s3, NULL, 0);
                     const char *n4[1] = { "Object" }; const void *v4[1] = { &root }; int s4[1] = { 8 };
@@ -307,7 +315,7 @@ static void run_command(char *line)
     }
     if (!strcmp(c, "members") && nt >= 2) {
         uint8_t *o = ptr_of(tok[1]);
-        if (!readable(o)) { P("bad pointer %s", tok[1]); return; }
+        if (!live(o)) { P("%s is not a live game object (null, dead or stale)", tok[1]); return; }
         struct MemCtx ctx = { o, NULL, 0, 0, 80, 0 };
         for (int i = 2; i < nt; i++) { if (!strcmp(tok[i], "fns")) ctx.want_fns = 1; else if (atoi(tok[i]) > 0) ctx.max = atoi(tok[i]); else ctx.filter = tok[i]; }
         char cn[96] = ""; A->obj_name(A->obj_class(o), cn, sizeof cn); P("%p class %s", o, cn);
@@ -326,7 +334,7 @@ static void run_command(char *line)
     }
     if (!strcmp(c, "get") && nt >= 3) {
         uint8_t *o = ptr_of(tok[1]);
-        if (!readable(o)) { P("bad pointer %s", tok[1]); return; }
+        if (!live(o)) { P("%s is not a live game object (null, dead or stale)", tok[1]); return; }
         struct InfoCtx ic = { tok[2], "", 0, 0, 0 };
         A->list_members(A->obj_class(o), info_cb, &ic);
         if (!ic.found) { P("no property %s", tok[2]); return; }
@@ -336,7 +344,7 @@ static void run_command(char *line)
     }
     if (!strcmp(c, "set") && nt >= 4) {
         uint8_t *o = ptr_of(tok[1]);
-        if (!readable(o)) { P("bad pointer %s", tok[1]); return; }
+        if (!live(o)) { P("%s is not a live game object (null, dead or stale)", tok[1]); return; }
         struct InfoCtx ic = { tok[2], "", 0, 0, 0 };
         A->list_members(A->obj_class(o), info_cb, &ic);
         if (!ic.found) { P("no property %s", tok[2]); return; }
@@ -361,7 +369,7 @@ static void run_command(char *line)
             o = A->find_object(NULL, "Default__KismetSystemLibrary", NULL); outer = "KismetSystemLibrary"; fn = "ExecuteConsoleCommand"; first = 99;
             for (int i = 1; i < nt; i++) { strcat(cmdtext, tok[i]); if (i + 1 < nt) strcat(cmdtext, " "); }
         } else { o = ptr_of(tok[1]); outer = tok[2]; fn = tok[3]; first = 4; }
-        if (!readable(o)) { P("bad target %s", tok[1]); return; }
+        if (!live(o)) { P("%s is not a live game object (null, dead or stale)", tok[1]); return; }
         const char *names[16]; const void *vals[16]; int sizes[16]; int na = 0;
         unsigned char store[16][32]; char nstr[16][100];
         uint8_t *world = NULL; uint8_t nullp[8] = { 0 };
