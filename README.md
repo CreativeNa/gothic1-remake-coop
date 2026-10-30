@@ -78,7 +78,7 @@ Set up a **copy** of the game in a separate folder (`tools\setup_test.ps1`) so t
 
 ### Performance with two copies
 
-Copy `tools\couchlink\perf_cmds.example.txt` to `nativeuild\perf_cmds.txt`: its console commands (the example only sets the render scale) run in every copy once its hero exists.
+Copy `tools\couchlink\perf_cmds.example.txt` to `native\build\perf_cmds.txt`: its console commands (the example only sets the render scale) run in every copy once its hero exists.
 
 ## Development tools
 
