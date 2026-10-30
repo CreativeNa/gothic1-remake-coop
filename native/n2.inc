@@ -389,6 +389,7 @@ static struct ModSlot {
     const char *name;
     HMODULE h; ModUpdate_t update; ModShutdown_t shutdown; ModInit_t init;
     FILETIME mtime; int serial; int need_init; char loaded_path[MAX_PATH];
+    double cost_sum, cost_max; int cost_n;      /* mod_update cost in ms since the last log line */
     int always;                 /* 1: called every engine tick (menu, loading screens, no friend needed); 0: only while the puppet exists */
 } g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "npc" }, { .name = "probe", .always = 1 } };
 static int g_nmods = 5;
@@ -771,8 +772,18 @@ static void module_run(int always)
             __try { m->init(&g_api); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("M exception in %s mod_init, module disabled", m->name); m->update = NULL; continue; }
         }
         g_in_mod = m->name;
+        LARGE_INTEGER q0, q1; QueryPerformanceCounter(&q0);
         __try { m->update(&g_api); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("M exception 0x%lx in %s mod_update, disabled until reload", GetExceptionCode(), m->name); m->update = NULL; }
         g_in_mod = NULL;
+        { static LARGE_INTEGER fq; if (!fq.QuadPart) QueryPerformanceFrequency(&fq); QueryPerformanceCounter(&q1); double ms = (double)(q1.QuadPart - q0.QuadPart) * 1000.0 / (double)fq.QuadPart; m->cost_sum += ms; m->cost_n++; if (ms > m->cost_max) m->cost_max = ms; }
+    }
+    if (always) {                                           /* once per 10 s: what every module costs per frame (average / worst, ms), to find what slows the game down */
+        static unsigned long lc; unsigned long nowc = GetTickCount();
+        if (nowc - lc > 10000) {
+            lc = nowc; char ln[400] = "";
+            for (int i = 0; i < g_nmods; i++) { struct ModSlot *m = &g_mods[i]; char one[80]; snprintf(one, sizeof one, " %s %.2f/%.1f", m->name, m->cost_n ? m->cost_sum / m->cost_n : 0.0, m->cost_max); strcat(ln, one); m->cost_sum = 0; m->cost_n = 0; m->cost_max = 0; }
+            logf_("M cost ms avg/max per frame:%s", ln);
+        }
     }
 }
 
