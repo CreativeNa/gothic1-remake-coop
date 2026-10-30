@@ -22,6 +22,7 @@ Last updated: 2026-10-30
 - Crash (access violation reading `0xd50`) a few seconds after swinging the sword near the puppet. The AV recorder pins it inside the game itself: `G1R-Win64-Shipping.exe+0x363dfff` is `cmp qword ptr [rcx+0xd50], 0` at the start of a method called with `this == NULL`; no coopdll frames on the stack. Prime suspect: the local sword hits the other player's owner-less item visual or the puppet mesh. Mitigation tried: collision fully disabled on item actors and on the poseable mesh (not yet verified). Previous mitigations: no destroy/respawn of the sword visual (re-attach instead), clip layer paused while the pose module drives the puppet.
 - Equipment attachments to the puppet were once floating next to the body; re-check.
 - Arrow count on the puppet's quiver can only go down.
+- **Open (parked):** in the second copy the quick-slot bar looked empty with the same save, and the other player's equipment is not (or not always) visible on the puppet there. Findings so far: both heroes report the full equipment list (quiver, bow, sword) and both processes create the items on their puppets; the HUD classes are identical in both copies; the GPU is nearly full with two copies (RTX 5060, 7.5 of 8.1 GB used, ~3.3 GB per copy), so UI icons / textures may be dropped from the streaming pool in one copy. Ideas: lower texture quality for both copies in the Couchlink recipe (`-ExecCmds="sg.TextureQuality 1"`), or a smaller `r.Streaming.PoolSize`; a leftover item visuals check with the probe `purge`.
 
 ## Not started
 
