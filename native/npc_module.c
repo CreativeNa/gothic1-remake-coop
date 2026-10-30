@@ -13,16 +13,17 @@
 #include <math.h>
 #include "coreapi.h"
 
-#define MAXN 160
+#define MAXN 100
 #define RADIUS 6000.0
 #define BUILD "C:/Program Files (x86)/Steam/steamapps/common/Gothic1R-coop/native/build/"
 
 #pragma pack(push, 1)
-typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_t flags, pad[3]; } Rec;     /* 24 bytes; yaw in 1/182.04 degrees */
+typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_t flags; uint8_t pad; uint16_t anim; } Rec;   /* anim: 1 + index into the string table (the NPC's current montage clip), 0 = none */
+     /* 24 bytes; yaw in 1/182.04 degrees */
 #pragma pack(pop)
 
 typedef struct { uint8_t *actor; uint32_t id; } Known;
-typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; } Mirror;
+typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; char anim[96]; } Mirror;
 
 static struct {
     Known known[2048]; int nknown; unsigned long last_scan, last_send, last_stat;
@@ -85,6 +86,25 @@ static double speed_of(CoreAPI *a, uint8_t *o)
 
 static double yaw_of(CoreAPI *a, uint8_t *o) { double r[3] = { 0, 0, 0 }; a->call_fn(o, "Actor", "K2_GetActorRotation", 0, NULL, NULL, NULL, r, 24); return r[1]; }   /* FRotator: pitch, yaw, roll */
 
+
+/* the clip of the NPC's active montage: name and package path, like the hero's action */
+static int clip_of(CoreAPI *a, uint8_t *o, char *name, int ncap, char *pkg, int pcap)
+{
+    name[0] = pkg[0] = 0;
+    uint8_t *mesh = ptr_prop(a, o, "Mesh"); if (!mesh) return 0;
+    uint8_t *ai = ptr_prop(a, mesh, "AnimScriptInstance"); if (!ai) return 0;
+    uint8_t *mont = NULL; if (!a->call_fn(ai, "AnimInstance", "GetCurrentActiveMontage", 0, NULL, NULL, NULL, &mont, 8) || !mont) return 0;
+    int ost = a->find_prop_offset(a->obj_class(mont), "SlotAnimTracks"); if (ost < 0) return 0;
+    uint8_t *tracks = NULL; int32_t nt = 0; a->read_mem(mont + ost, &tracks, 8); a->read_mem(mont + ost + 8, &nt, 4);
+    if (!tracks || nt <= 0) return 0;
+    uint8_t *segs = NULL; int32_t ns = 0; a->read_mem(tracks + 8, &segs, 8); a->read_mem(tracks + 16, &ns, 4);
+    if (!segs || ns <= 0) return 0;
+    uint8_t *ref = NULL; a->read_mem(segs, &ref, 8); if (!ref) return 0;
+    a->obj_name(ref, name, ncap);
+    uint8_t *pk = NULL; a->read_mem(ref + 0x20, &pk, 8); if (pk) a->obj_name(pk, pkg, pcap);
+    return name[0] != 0;
+}
+
 /* ---- host ---- */
 static void host_tick(CoreAPI *a, unsigned long now)
 {
@@ -92,7 +112,9 @@ static void host_tick(CoreAPI *a, unsigned long now)
     N.last_send = now;
     double c1[3], c2[3]; int have2 = a->puppet && loc_of(a, a->puppet, c2);
     if (!loc_of(a, a->hero, c1)) return;
-    uint8_t buf[2 + MAXN * sizeof(Rec)]; int cnt = 0;
+    static uint8_t buf[9000]; int cnt = 0, nstr = 0, strpos = 0;
+    static char strs[40][200]; static char strtab[3000];
+    static Rec recs[MAXN];
     for (int i = 0; i < N.nknown && cnt < MAXN; i++) {
         uint8_t *o = N.known[i].actor; if (!a->obj_alive(o, NULL)) continue;
         double p[3]; if (!loc_of(a, o, p)) continue;
@@ -102,10 +124,18 @@ static void host_tick(CoreAPI *a, unsigned long now)
         Rec r; memset(&r, 0, sizeof r);
         r.id = N.known[i].id; r.x = (float)p[0]; r.y = (float)p[1]; r.z = (float)p[2];
         r.yaw = (int16_t)(yaw_of(a, o) * 182.04); r.speed = (uint16_t)speed_of(a, o);
-        memcpy(buf + 2 + cnt * sizeof(Rec), &r, sizeof r); cnt++;
+        char cn[120], cp[200];
+        if (clip_of(a, o, cn, sizeof cn, cp, sizeof cp)) {
+            char both[300]; snprintf(both, sizeof both, "%s|%s", cn, cp);
+            int k = -1; for (int j = 0; j < nstr; j++) if (strcmp(strs[j], both) == 0) k = j;
+            if (k < 0 && nstr < 40 && strpos + (int)strlen(both) + 1 < (int)sizeof strtab) { k = nstr; snprintf(strs[nstr++], 200, "%s", both); memcpy(strtab + strpos, both, strlen(both) + 1); strpos += (int)strlen(both) + 1; }
+            if (k >= 0) r.anim = (uint16_t)(k + 1);
+        }
+        recs[cnt++] = r;
     }
-    buf[0] = (uint8_t)(cnt & 255); buf[1] = (uint8_t)(cnt >> 8);
-    a->set_local_blob2(buf, 2 + cnt * (int)sizeof(Rec));
+    buf[0] = (uint8_t)(cnt & 255); buf[1] = (uint8_t)(cnt >> 8); buf[2] = (uint8_t)nstr; buf[3] = (uint8_t)(strpos & 255); buf[4] = (uint8_t)(strpos >> 8);
+    memcpy(buf + 5, recs, (size_t)cnt * sizeof(Rec)); memcpy(buf + 5 + cnt * sizeof(Rec), strtab, (size_t)strpos);
+    a->set_local_blob2(buf, 5 + cnt * (int)sizeof(Rec) + strpos);
     N.n_sent = cnt;
 }
 
@@ -118,6 +148,23 @@ static Mirror *mirror_for(CoreAPI *a, uint32_t id)
     if (!act || !a->obj_alive(act, NULL)) return NULL;
     Mirror *m = &N.m[N.nm++]; memset(m, 0, sizeof *m); m->actor = act; m->id = id;
     return m;
+}
+
+
+/* play the host's montage clip on the frozen NPC (single-node animation), or give the animation blueprint back when the host plays none */
+static void set_anim(CoreAPI *a, Mirror *m)
+{
+    uint8_t *mesh = ptr_prop(a, m->actor, "Mesh"); if (!mesh) return;
+    if (!m->anim[0]) {
+        uint8_t mode = 0; const char *n[1] = { "InAnimationMode" }; const void *v[1] = { &mode }; int s[1] = { 1 };
+        a->call_fn(mesh, "SkeletalMeshComponent", "SetAnimationMode", 1, n, v, s, NULL, 0);
+        return;
+    }
+    char nm[100], pk[200] = "-"; snprintf(nm, sizeof nm, "%s", m->anim);
+    char *bar = strchr(nm, '|'); if (bar) { *bar = 0; snprintf(pk, sizeof pk, "%s", bar + 1); }
+    uint8_t *seq = a->clip_by_name(nm, pk); if (!seq) return;
+    uint8_t lp = 1; const char *n[2] = { "NewAnimToPlay", "bLooping" }; const void *v[2] = { &seq, &lp }; int s[2] = { 8, 1 };
+    a->call_fn(mesh, "SkeletalMeshComponent", "PlayAnimation", 2, n, v, s, NULL, 0);
 }
 
 static void freeze(CoreAPI *a, Mirror *m)
@@ -133,21 +180,25 @@ static void release(CoreAPI *a, Mirror *m)
         a->call_fn(m->ctrl, "Controller", "Possess", 1, n, v, s, NULL, 0);
     }
     m->frozen = 0; m->have_cur = 0;
+    if (m->anim[0] && m->actor && a->obj_alive(m->actor, NULL)) { m->anim[0] = 0; set_anim(a, m); }
 }
 
 static void guest_tick(CoreAPI *a, unsigned long now)
 {
-    if (a->remote_blob2_seq != N.last_seq && a->remote_blob2_len >= 2) {          /* a new list from the host */
+    if (a->remote_blob2_seq != N.last_seq && a->remote_blob2_len >= 5) {          /* a new list from the host */
         N.last_seq = a->remote_blob2_seq;
-        int cnt = a->remote_blob2[0] | (a->remote_blob2[1] << 8);
-        if (cnt > MAXN) cnt = MAXN;
-        if (2 + cnt * (int)sizeof(Rec) > a->remote_blob2_len) cnt = (a->remote_blob2_len - 2) / (int)sizeof(Rec);
+        const uint8_t *B = a->remote_blob2; int len = a->remote_blob2_len;
+        int cnt = B[0] | (B[1] << 8), nstr = B[2], strpos = B[3] | (B[4] << 8);
+        if (cnt > MAXN || 5 + cnt * (int)sizeof(Rec) + strpos > len) cnt = 0;
+        const char *strv[40]; int ns = 0; { const char *q = (const char *)B + 5 + cnt * sizeof(Rec); const char *end = q + strpos; while (q < end && ns < nstr && ns < 40) { strv[ns++] = q; q += strlen(q) + 1; } }
         N.n_missing = 0;
         for (int k = 0; k < cnt; k++) {
-            Rec r; memcpy(&r, a->remote_blob2 + 2 + k * sizeof(Rec), sizeof r);
+            Rec r; memcpy(&r, B + 5 + k * sizeof(Rec), sizeof r);
             Mirror *m = mirror_for(a, r.id); if (!m) { N.n_missing++; continue; }
             m->want = r; m->last_seen = now;
             if (!m->frozen) freeze(a, m);
+            const char *want_anim = (r.anim > 0 && r.anim <= ns) ? strv[r.anim - 1] : "";
+            if (strcmp(want_anim, m->anim) != 0) { snprintf(m->anim, sizeof m->anim, "%s", want_anim); set_anim(a, m); }
         }
     }
     double dt = N.t_prev ? (now - N.t_prev) / 1000.0 : 0.016; N.t_prev = now; if (dt > 0.1) dt = 0.1;
