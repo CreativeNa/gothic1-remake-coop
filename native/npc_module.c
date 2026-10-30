@@ -23,7 +23,7 @@ typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_
 #pragma pack(pop)
 
 typedef struct { uint8_t *actor; uint32_t id; } Known;
-typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; char anim[96]; } Mirror;
+typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[96]; } Mirror;
 
 static struct {
     Known known[2048]; int nknown; unsigned long last_scan, last_send, last_stat;
@@ -169,13 +169,17 @@ static void set_anim(CoreAPI *a, Mirror *m)
 
 static void freeze(CoreAPI *a, Mirror *m)
 {
+    /* the controller stays possessed: with a null controller the game's own perception code (PerceptionConditions, other NPCs looking at this one) crashed with a null read.
+     * The local AI keeps running, but the NPC is placed and animated from the host's data every frame. build
+pc_unpossess.txt = the old way (UnPossess). */
     m->ctrl = ptr_prop(a, m->actor, "Controller");
-    if (m->ctrl) a->call_fn(m->ctrl, "Controller", "UnPossess", 0, NULL, NULL, NULL, NULL, 0);
+    m->unposs = GetFileAttributesA(BUILD "npc_unpossess.txt") != INVALID_FILE_ATTRIBUTES;
+    if (m->unposs && m->ctrl) a->call_fn(m->ctrl, "Controller", "UnPossess", 0, NULL, NULL, NULL, NULL, 0);
     m->frozen = 1;
 }
 static void release(CoreAPI *a, Mirror *m)
 {
-    if (m->frozen && m->ctrl && m->actor && a->obj_alive(m->ctrl, NULL) && a->obj_alive(m->actor, NULL)) {
+    if (m->frozen && m->unposs && m->ctrl && m->actor && a->obj_alive(m->ctrl, NULL) && a->obj_alive(m->actor, NULL)) {
         const char *n[1] = { "InPawn" }; const void *v[1] = { &m->actor }; int s[1] = { 8 };
         a->call_fn(m->ctrl, "Controller", "Possess", 1, n, v, s, NULL, 0);
     }
