@@ -6,7 +6,7 @@ param(
     [string]$Peer = "127.0.0.1",
     [int]$BasePort = 40001,
     [string]$Dll = "",                 # default: the newest native\build\coopdll_*.dll
-    [int]$SettleSeconds = 20           # the game needs ~20-30 s after its process exists before the DLL can be injected (at 8 s the engine has not created its objects yet and the DLL never hooks)
+    [int]$SettleSeconds = 13           # the game needs ~20-30 s after its process exists before the DLL can be injected (at 8 s the engine has not created its objects yet and the DLL never hooks)
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
