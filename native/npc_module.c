@@ -97,16 +97,16 @@ static int clip_of(CoreAPI *a, uint8_t *o, char *name, int ncap, char *pkg, int 
     int ost = a->find_prop_offset(a->obj_class(mont), "SlotAnimTracks"); if (ost < 0) return 0;
     uint8_t *tracks = NULL; int32_t nt = 0; a->read_mem(mont + ost, &tracks, 8); a->read_mem(mont + ost + 8, &nt, 4);
     if (!tracks || nt <= 0) return 0;
-    /* every slot track (FSlotAnimationTrack, 24 bytes) and every segment (FAnimSegment, 32 bytes): the first track can be a facial animation (FA_*), which on the whole mesh gives a T-pose */
+    /* every slot track (FSlotAnimationTrack, 24 bytes) and every segment (FAnimSegment, 32 bytes): the first track can be a voice / facial clip (GVL_*), which on the whole mesh gives a T-pose */
     for (int t = 0; t < nt && t < 6; t++) {
         uint8_t *segs = NULL; int32_t ns = 0; a->read_mem(tracks + (size_t)t * 24 + 8, &segs, 8); a->read_mem(tracks + (size_t)t * 24 + 16, &ns, 4);
         if (!segs || ns <= 0) continue;
         for (int k = 0; k < ns && k < 4; k++) {
             uint8_t *ref = NULL; a->read_mem(segs + (size_t)k * 32, &ref, 8); if (!ref || !a->obj_alive(ref, NULL)) continue;
             char tmp[120]; a->obj_name(ref, tmp, sizeof tmp);
-            if (strncmp(tmp, "FA_", 3) == 0 || strncmp(tmp, "Face", 4) == 0) continue;
-            snprintf(name, ncap, "%s", tmp);
-            uint8_t *pk = NULL; a->read_mem(ref + 0x20, &pk, 8); if (pk) a->obj_name(pk, pkg, pcap);
+            uint8_t *pk = NULL; a->read_mem(ref + 0x20, &pk, 8); char pn[300] = ""; if (pk) a->obj_name(pk, pn, sizeof pn);
+            if (strncmp(tmp, "GVL_", 4) == 0 || strstr(pn, "DialogFacials") || strstr(pn, "_Voicetypes")) continue;   /* voice / facial clips: not the body (FA_Man_* are fight animations, those are body clips) */
+            snprintf(name, ncap, "%s", tmp); snprintf(pkg, pcap, "%s", pn);
             return 1;
         }
     }
