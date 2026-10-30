@@ -34,7 +34,7 @@
   "registry": [],
   "locks": [],
   "input": {
-    "xinput": true,
+    "xinput": false,
     "dinput": false,
     "rawinput": false
   },
