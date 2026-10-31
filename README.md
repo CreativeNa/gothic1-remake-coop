@@ -36,6 +36,8 @@ See [STATUS.md](STATUS.md) for the full list. The main gaps: IP transport untest
 
 More detail: [docs/NOTES.md](docs/NOTES.md) (findings log) and [docs/coop-anything-writeup.md](docs/coop-anything-writeup.md).
 
+For contributors: [CONTRIBUTING.md](CONTRIBUTING.md) (build, test, rules), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/GAME_RECON.md](docs/GAME_RECON.md) (what is known about the game) and [docs/ROADMAP.md](docs/ROADMAP.md) (open tasks).
+
 ## Is it safe? What the injector does
 
 The mod works by loading a DLL into the game process, so here is exactly what that means:
