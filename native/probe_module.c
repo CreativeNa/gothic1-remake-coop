@@ -760,7 +760,7 @@ static void autoload_tick(void)
     }
     if (!AL.seen_t) { AL.seen_t = now; A->log("PR autoload: main menu widget %p found %.1f s after the process started; waits %.1f s%s", AL.menu, proc_age_s(), wait, al_seat() > 0 ? " and for the previous seat to finish loading" : ""); }
     if (now - AL.seen_t < (unsigned long)(wait * 1000)) return;
-    if (al_seat() > 0 && !al_prev_seat_done() && now - AL.seen_t < (unsigned long)((wait + gap) * 1000)) return;   /* one load at a time (the GPU memory); give up waiting after gap seconds */
+    if (al_seat() > 0 && !strstr(GetCommandLineA(), "-NoLoadGap") && !al_prev_seat_done() && now - AL.seen_t < (unsigned long)((wait + gap) * 1000)) return;   /* one load at a time (the GPU memory); give up waiting after gap seconds */
     int act = 0; A->call_fn(AL.menu, "CommonActivatableWidget", "IsActivated", 0, NULL, NULL, NULL, &act, 1);
     if (!(act & 255)) return;                                                /* the menu must be the active page (not the intro / disclaimer); the bitfield itself reads as garbage */
     int en = 0; A->call_fn(AL.menu, "MainMenuWidget", "IsContinueEnabled", 0, NULL, NULL, NULL, &en, 1);

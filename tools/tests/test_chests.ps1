@@ -8,6 +8,7 @@ function Check($name, [bool]$ok, $detail = "") { [void]$results.Add([pscustomobj
 function PidOf($seat) { (Get-CimInstance Win32_Process -Filter "Name='G1R-Win64-Shipping.exe'" | Where-Object { $_.CommandLine -match "-CoopSeat=$seat(\s|$)" } | Select-Object -First 1).ProcessId }
 function Probe($seat, $cmd) { $o = & $dev probe "@$seat $cmd" 2>&1 | Out-String; $id = PidOf $seat; if (-not $id) { return "" }; (($o -split "===== game pid ") | Where-Object { $_ -match "^$id" }) -join "`n" }
 . (Join-Path $PSScriptRoot "lib.ps1")
+$fastFlag = Join-Path $c "native/build/scan_fast.txt"; Set-Content $fastFlag "1"          # whole-world item scan in ~2 s instead of 15 s while the test runs
 if ((PidOf 0) -and (PidOf 1)) { Restore-Heroes }
 function Hero($seat) { [regex]::Match((Probe $seat "frames"), "hero=([0-9A-F]+)").Groups[1].Value }
 if (-not ((PidOf 0) -and (PidOf 1))) { throw "start both copies first" }
@@ -24,7 +25,7 @@ function RunOne($from, $to, $label) {
     $t = Probe $from "tpto 0x$(Hero $from) 0x$ptr 200 0 80"; $pos = [regex]::Match($t, "target at (-?\d+) (-?\d+) (-?\d+)")
     if (-not $pos.Success) { Check "$label setup: hero next to the chest" $false; return }
     Probe $to "tp hero $($pos.Groups[1].Value) $([int]$pos.Groups[2].Value + 150) $([int]$pos.Groups[3].Value + 80)" | Out-Null
-    Start-Sleep 50
+    Start-Sleep 12
     $mark = (Get-Content $log | Measure-Object -Line).Lines
     $r = Probe $from "emptychest 0x$ptr"
     Start-Sleep 8
@@ -37,6 +38,7 @@ function RunOne($from, $to, $label) {
 RunOne 0 1 "host->guest"
 RunOne 1 0 "guest->host"
 if ((PidOf 0) -and (PidOf 1)) { Restore-Heroes }
+Remove-Item $fastFlag -ErrorAction SilentlyContinue
 $pass = @($results | Where-Object Result -eq "PASS").Count
 $dir = Join-Path $c "docs\reports"; New-Item -ItemType Directory -Force $dir | Out-Null
 $md = "# Chest sync $(Get-Date -Format 'yyyy-MM-dd HH:mm')`n`n$pass / $($results.Count) checks passed.`n`n| Result | Check | Detail |`n|---|---|---|`n"

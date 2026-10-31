@@ -8,6 +8,7 @@ function Check($name, [bool]$ok, $detail = "") { [void]$results.Add([pscustomobj
 function PidOf($seat) { (Get-CimInstance Win32_Process -Filter "Name='G1R-Win64-Shipping.exe'" | Where-Object { $_.CommandLine -match "-CoopSeat=$seat(\s|$)" } | Select-Object -First 1).ProcessId }
 function Probe($seat, $cmd) { $o = & $dev probe "@$seat $cmd" 2>&1 | Out-String; $id = PidOf $seat; if (-not $id) { return "" }; (($o -split "===== game pid ") | Where-Object { $_ -match "^$id" }) -join "`n" }
 . (Join-Path $PSScriptRoot "lib.ps1")
+$fastFlag = Join-Path $c "native/build/scan_fast.txt"; Set-Content $fastFlag "1"          # whole-world item scan in ~2 s instead of 15 s while the test runs
 if ((PidOf 0) -and (PidOf 1)) { Restore-Heroes }
 function Hero($seat) { [regex]::Match((Probe $seat "frames"), "hero=([0-9A-F]+)").Groups[1].Value }
 $hp = PidOf 0; $gp = PidOf 1
@@ -21,7 +22,7 @@ function RunOne($from, $to, $label, $item) {
     if (-not $pos.Success) { return }
     $x = [int]$pos.Groups[1].Value; $y = [int]$pos.Groups[2].Value; $z = [int]$pos.Groups[3].Value
     Probe $to "tp hero $x $($y + 150) $($z + 80)" | Out-Null
-    Start-Sleep 45                                                              # the world settles (15 s) and the item list is built (a slice of the object table per second); what the game removes by itself at the teleport is over by then
+    Start-Sleep 20                                                              # the world settles (15 s) and the item list is built (a slice of the object table per second); what the game removes by itself at the teleport is over by then
     $best = $null; $bestName = ""; $bd = 1e9                                                     # now the item closest to the hero that still exists
     foreach ($mm in [regex]::Matches((Probe $from "ioscan $item 40"), "([0-9A-F]{16}) (\S+) \(\S+\) pos (-?\d+) (-?\d+) (-?\d+)")) {
         $d = [math]::Sqrt([math]::Pow([int]$mm.Groups[3].Value - $x, 2) + [math]::Pow([int]$mm.Groups[4].Value - $y, 2)); if ($d -lt $bd) { $bd = $d; $best = $mm.Groups[1].Value; $bestName = $mm.Groups[2].Value }
@@ -43,6 +44,7 @@ function RunOne($from, $to, $label, $item) {
 RunOne 0 1 "host->guest" "World_C"
 RunOne 1 0 "guest->host" "World_C"
 if ((PidOf 0) -and (PidOf 1)) { Restore-Heroes }
+Remove-Item $fastFlag -ErrorAction SilentlyContinue
 $pass = @($results | Where-Object Result -eq "PASS").Count
 $dir = Join-Path $c "docs\reports"; New-Item -ItemType Directory -Force $dir | Out-Null
 $md = "# World item sync $(Get-Date -Format 'yyyy-MM-dd HH:mm')`n`n$pass / $($results.Count) checks passed.`n`n| Result | Check | Detail |`n|---|---|---|`n"

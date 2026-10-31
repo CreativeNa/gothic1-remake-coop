@@ -36,7 +36,7 @@ static struct {
     int hist[256]; int histlogged;
     /* world items: picked up here -> removed there (matched by the persistent id every placed actor has) */
     It it[MAXI]; int nit; Gone gone[128]; int ngone; uint8_t removed[2048][16]; int nremoved;
-    uint8_t *cls_cont; int keep_birds, n_birds;
+    uint8_t *cls_cont; int keep_birds, n_birds, fast_scan;
     /* container loot: Server_ConsumeItem calls the game makes on a tracked chest's module (a player took items out) are replayed on the other copy */
     struct { uint32_t lid; uint8_t id[16]; uint8_t type; int32_t item, amount; unsigned sent; } lootq[64]; int nloot; uint32_t loot_next;
     uint32_t seen_lid[256]; int nseen;
@@ -144,19 +144,28 @@ static int write_state(CoreAPI *a, Q *q, uint8_t st, int bulk)
 }
 
 static void loot_apply(CoreAPI *a, It *t, uint8_t type, int32_t item, int32_t amount);
+/* class -> kind (0 nothing, 1 world item, 2 chest, 3 ambient bird) and the offset of m_PersistentId. EVERY class is cached (the game has thousands; a small cache made the scan
+ * recompute names and property offsets for most objects every second and the game grew by gigabytes), in an open-addressing table keyed by the class pointer */
+#define CLS_TAB 32768
+static struct { uint8_t *k; int16_t idoff; uint8_t has; } g_cls[CLS_TAB];
 static int cls_has_item(CoreAPI *a, uint8_t *k, int *idoff)
 {
-    for (int i = 0; i < S.ncls; i++) if (S.cls_ok[i] == k) { if (S.cls_has[i] == 1 || S.cls_has[i] == 2) *idoff = a->find_prop_offset(k, "m_PersistentId"); return S.cls_has[i]; }
-    int has = 0;
-    { char cn[96]; a->obj_name(k, cn, sizeof cn); for (char *c = cn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32;
-      if (strstr(cn, "pidgeon_bp") || strstr(cn, "crow_bp") || strstr(cn, "ambientlifewarningflock")) has = 3; }          /* ambient birds: their audio emitters crash the game (fmod, exe+0x5be3977) */
-    if (!has && a->find_prop_offset(k, "m_PersistentId") >= 0) {
+    unsigned h = (unsigned)(((uintptr_t)k >> 4) * 2654435761u) & (CLS_TAB - 1);
+    for (int n = 0; n < CLS_TAB; n++, h = (h + 1) & (CLS_TAB - 1)) {
+        if (g_cls[h].k == k) { *idoff = g_cls[h].idoff; return g_cls[h].has; }
+        if (!g_cls[h].k) break;
+    }
+    int has = 0, io = -1;
+    if (a->find_prop_offset(k, "m_PersistentId") >= 0) {
+        io = a->find_prop_offset(k, "m_PersistentId");
         if (a->find_prop_offset(k, "m_WorldItemDefinition") >= 0) has = 1;
         else if (a->find_prop_offset(k, "m_DataModuleComponent") >= 0) { char cn[96]; a->obj_name(k, cn, sizeof cn); for (char *c = cn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32; if (strstr(cn, "chest")) has = 2; }
     }
-    if (S.ncls < 300) { S.cls_ok[S.ncls] = k; S.cls_has[S.ncls] = (uint8_t)has; S.ncls++; }
-    if (has == 1 || has == 2) *idoff = a->find_prop_offset(k, "m_PersistentId");
-    return has;
+    if (!has) { char cn[96]; a->obj_name(k, cn, sizeof cn); for (char *c = cn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32;
+        if (strstr(cn, "pidgeon_bp") || strstr(cn, "crow_bp") || strstr(cn, "ambientlifewarningflock")) has = 3; }          /* ambient birds: their audio emitters crash the game (fmod, exe+0x5be3977) */
+    unsigned w = (unsigned)(((uintptr_t)k >> 4) * 2654435761u) & (CLS_TAB - 1);
+    for (int n = 0; n < CLS_TAB; n++, w = (w + 1) & (CLS_TAB - 1)) if (!g_cls[w].k) { g_cls[w].k = k; g_cls[w].idoff = (int16_t)io; g_cls[w].has = (uint8_t)has; break; }
+    *idoff = io; return has;
 }
 static int loc_of(CoreAPI *a, uint8_t *o, double *v) { double r[3] = { 0, 0, 0 }; if (!a->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, r, 24)) return 0; v[0] = r[0]; v[1] = r[1]; v[2] = r[2]; return 1; }
 static uint8_t *chest_module(CoreAPI *a, uint8_t *actor)
@@ -191,7 +200,7 @@ static void idstr(const uint8_t *id, char *o) { sprintf(o, "%02x%02x%02x%02x-%02
 static void scan_items(CoreAPI *a, double *hp)
 {
     int n = a->num_objects(); if (S.isc_pos >= n) S.isc_pos = 0;
-    int end = S.isc_pos + 30000; if (end > n) end = n;
+    int end = S.isc_pos + (S.fast_scan ? 80000 : 30000); if (end > n) end = n;                  /* tests create build\scan_fast.txt: a whole pass in about 6 s instead of 15 s (a hitch of a few frames) */
     for (int i = S.isc_pos; i < end; i++) {
         uint8_t *o = a->object_at(i); if (!o) continue;
         int idoff = -1; int kind = cls_has_item(a, a->obj_class(o), &idoff); if (!kind) continue;
@@ -382,7 +391,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     go:;
     int fresh = now - S.last_tick >= 1000; if (fresh) S.last_tick = now;
     if (GetFileAttributesA(BUILD "story_off.txt") != INVALID_FILE_ATTRIBUTES) { S.off = 1; return; }
-    S.off = 0; S.role = role_of(); S.keep_birds = GetFileAttributesA(BUILD "ambient_keep.txt") != INVALID_FILE_ATTRIBUTES;
+    S.off = 0; S.role = role_of(); S.keep_birds = GetFileAttributesA(BUILD "ambient_keep.txt") != INVALID_FILE_ATTRIBUTES; S.fast_scan = GetFileAttributesA(BUILD "scan_fast.txt") != INVALID_FILE_ATTRIBUTES;
     if (a->hero != S.last_hero) { S.last_hero = a->hero; S.last_hero_t = now; reset_story(); S.qsys = NULL; S.nq = 0; S.scanning = 0; S.have_contact = 0; }
     if (a->hero && now - S.last_hero_t >= 10000) obs_tick(a);                              /* works with a single copy too */
     if (!a->hero || !a->have_remote || now - S.last_hero_t < 10000) return;               /* a new world has to settle first */

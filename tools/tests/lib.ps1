@@ -14,5 +14,5 @@ function Restore-Heroes {
         $b = $s * 3; $dx = $pos[$s][0] - $v[$b]; $dy = $pos[$s][1] - $v[$b + 1]
         if ([math]::Sqrt($dx * $dx + $dy * $dy) -gt 800) { Probe $s "tp hero $($v[$b]) $($v[$b + 1]) $($v[$b + 2] + 60)" | Out-Null; $moved = $true }
     }
-    if ($moved) { Start-Sleep 30 }
+    if ($moved) { Start-Sleep 12 }
 }
