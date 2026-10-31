@@ -27,7 +27,7 @@ foreach ($seat in $Seats) {
             $o = & "$c\tools\dev.ps1" probe "frames" 2>&1 | Out-String
             if ($o -match "hero=0000[0-9A-F]*[1-9A-F]") { break }
         }
-        Start-Sleep 10
+        Start-Sleep 3
     } elseif ($seat -eq 0) { Start-Sleep 13 }
 }
 if (-not $NoWatchdog) { Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$c\tools\watchdog.ps1`"" -WindowStyle Hidden }

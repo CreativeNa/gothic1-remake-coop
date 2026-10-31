@@ -13,6 +13,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include "coreapi.h"
+#define BUILD "C:/Program Files (x86)/Steam/steamapps/common/Gothic1R-coop/native/build/"
+
+/* a cutscene runs on this copy (the story module writes build\cine_active.txt while the cinematic object exists): the other player's puppet must not stand in the shot */
+static int cine_running(unsigned long now)
+{
+    static unsigned long t; static int v;
+    if (now - t > 600) { t = now; v = GetFileAttributesA(BUILD "cine_active.txt") != INVALID_FILE_ATTRIBUTES; }
+    return v;
+}
 
 #include <math.h>
 #define MAXV 8
@@ -218,7 +227,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     {   /* hide the puppet's items while the friend sends no poses (main menu, loading), the same rule as the pose module uses for the puppet */
         static int last_seen = -1; static unsigned long seen_t; static int hidden_state = -1;
         if (a->remote_blob_seq != last_seen) { last_seen = a->remote_blob_seq; seen_t = now; }
-        int away = a->remote_blob_seq == 0 || now - seen_t > 1500;
+        int away = a->remote_blob_seq == 0 || now - seen_t > 1500 || cine_running(now);
         if (away != hidden_state || (away && now - E.last_hide > 2000)) {         /* also re-apply while away: items may be spawned meanwhile */
             hidden_state = away; E.last_hide = now;
             for (int i = 0; i < MAXV; i++) {

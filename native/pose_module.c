@@ -14,6 +14,15 @@
 #include <stdlib.h>
 #include <math.h>
 #include "coreapi.h"
+#define BUILD "C:/Program Files (x86)/Steam/steamapps/common/Gothic1R-coop/native/build/"
+
+/* a cutscene runs on this copy (the story module writes build\cine_active.txt while the cinematic object exists): the other player's puppet must not stand in the shot */
+static int cine_running(unsigned long now)
+{
+    static unsigned long t; static int v;
+    if (now - t > 600) { t = now; v = GetFileAttributesA(BUILD "cine_active.txt") != INVALID_FILE_ATTRIBUTES; }
+    return v;
+}
 
 #define MAXB 480
 typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1; } Transform;   /* FTransform: FQuat, translation, scale */
@@ -448,7 +457,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     {   /* the friend sends nothing in the main menu or while loading: hide the puppet then (it would hang frozen, maybe mid-jump), and until the first pose has arrived */
         static int last_seen = -1; static unsigned long seen_t;
         if (a->remote_blob_seq != last_seen) { last_seen = a->remote_blob_seq; seen_t = now; }
-        int away = a->remote_blob_seq == 0 || now - seen_t > 1500;
+        int away = a->remote_blob_seq == 0 || now - seen_t > 1500 || cine_running(now);
         if (away != P.away) {
             P.away = away;
             /* the core un-hides the puppet ACTOR on every tick (old guard against the game hiding spawned characters), so hide the poseable COMPONENT instead */

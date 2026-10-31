@@ -1315,6 +1315,42 @@ static void hk_tick(void *self, float dt, unsigned char idle)
     __try { module_always(); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("EXCEPTION 0x%lx in module_always", GetExceptionCode()); }
 }
 
+/* Crash guard (exe+0x5be3970, seen five times as "reading 0x200"): a geometry predicate `bool f(const double *point (rcx), const View *v (rdx))` called from the audio code reads
+ * [rdx+0x200..0x550] and faults when the second argument is NULL. Its first instruction is `mov rax,rsp; sub rsp,0x78`; it is replaced by a jump to a stub that returns false for a NULL
+ * second argument and otherwise runs the two displaced instructions and continues in the function. The stub is placed within +-2 GB of the exe (rel32 jump). */
+static void install_null_guard(void)
+{
+    uint8_t *fn = g_base + 0x5BE3970u;
+    static const uint8_t want[14] = { 0x48, 0x8B, 0xC4, 0x48, 0x83, 0xEC, 0x78, 0x0F, 0x10, 0x8A, 0x00, 0x02, 0x00, 0x00 };
+    uint8_t cur[14]; if (!safe_read(fn, cur, 14) || memcmp(cur, want, 14) != 0) { logf_("guard: bytes at exe+0x5be3970 are not the expected ones, not patched"); return; }
+    uint8_t *stub = NULL;
+    for (intptr_t d = 0x1000000; d < 0x70000000 && !stub; d += 0x1000000) {
+        void *a = VirtualAlloc((void *)((uintptr_t)fn - d), 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+        if (a && (uintptr_t)a < (uintptr_t)fn + 0x70000000u) stub = (uint8_t *)a; else if (a) VirtualFree(a, 0, MEM_RELEASE);
+    }
+    if (!stub) { logf_("guard: no memory near the exe for the stub, not patched"); return; }
+    uint8_t *q = stub;
+    *q++ = 0x48; *q++ = 0x85; *q++ = 0xD2;                         /* test rdx, rdx */
+    *q++ = 0x75; *q++ = 0x03;                                      /* jnz +3 */
+    *q++ = 0x31; *q++ = 0xC0;                                      /* xor eax, eax */
+    *q++ = 0xC3;                                                   /* ret */
+    *q++ = 0x48; *q++ = 0x8B; *q++ = 0xC4;                         /* mov rax, rsp (displaced) */
+    *q++ = 0x48; *q++ = 0x83; *q++ = 0xEC; *q++ = 0x78;            /* sub rsp, 0x78 (displaced) */
+    *q++ = 0x49; *q++ = 0xBB; { uint64_t ret = (uint64_t)(fn + 7); memcpy(q, &ret, 8); q += 8; }   /* mov r11, fn+7 */
+    *q++ = 0x41; *q++ = 0xFF; *q++ = 0xE3;                         /* jmp r11 */
+    int64_t rel = (int64_t)(stub - (fn + 5)); if (rel > 0x7FFFFFFF || rel < -0x7FFFFFFFll) { logf_("guard: stub too far (%lld), not patched", (long long)rel); return; }
+    uint8_t patch[8] = { 0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x0F };      /* the 8th byte is the original one (start of movups) */
+    int32_t r32 = (int32_t)rel; memcpy(patch + 1, &r32, 4);
+    DWORD old; if (!VirtualProtect(fn, 8, PAGE_EXECUTE_READWRITE, &old)) { logf_("guard: VirtualProtect failed"); return; }
+    uint64_t q64; memcpy(&q64, patch, 8); InterlockedExchange64((volatile LONG64 *)fn, (LONG64)q64);        /* the function is 16-byte aligned: one atomic 8-byte store */
+    VirtualProtect(fn, 8, old, &old); FlushInstructionCache(GetCurrentProcess(), fn, 8);
+    /* self test: a NULL second argument must give false, a zeroed view must run the normal path without a fault */
+    typedef unsigned char (*Pred_t)(const double *, const void *);
+    double pt[3] = { 0, 0, 0 }; static uint8_t view[0x600]; unsigned char r0 = 9, r1 = 9;
+    __try { r0 = ((Pred_t)fn)(pt, NULL); r1 = ((Pred_t)fn)(pt, view); } __except (EXCEPTION_EXECUTE_HANDLER) { logf_("guard: SELF TEST FAULTED (code 0x%lx)", GetExceptionCode()); }
+    logf_("guard: exe+0x5be3970 patched (stub %p); self test: NULL view -> %d, zero view -> %d", (void *)stub, r0, r1);
+}
+
 static void install_tick_hook(void)
 {
     char nm[256];
@@ -1334,4 +1370,5 @@ static void install_tick_hook(void)
     *slot = (void *)hk_tick;
     VirtualProtect(slot, 8, old, &old);
     logf_("hook installed: vtable slot 95 %p -> %p (orig %p)", (void *)slot, (void *)hk_tick, (void *)g_orig_tick);
+    install_null_guard();
 }
