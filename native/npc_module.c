@@ -36,7 +36,7 @@ static struct {
     struct { uint8_t *cls; int v; } cc[16384]; int ncc; int scan_pos, scanning, scan_n; Known tmp[2048]; int ntmp;
     Mirror m[MAXN]; int nm; int last_seq;
     int role, off; int off_vel; unsigned long t_prev;
-    int n_sent, n_applied, n_missing;
+    int n_sent, n_applied, n_missing; uint8_t *last_hero; unsigned long t_hero;
     HPose hp[NFOCUS]; uint8_t *focus[NFOCUS]; int nfocus; unsigned long last_focus; int rr, n_posed;
 } N;
 
@@ -417,6 +417,7 @@ static void gp_apply(CoreAPI *a, Mirror *m)
     if (g->dirty) { g->dirty = 0; g->pending = g->napplied ? 10 : 36; }       /* the bone hierarchy is ~15 levels deep and each pass fixes one more level */                          /* a pose is applied over several frames in a row: SetBoneTransformByName converts a bone through its parent's pose of the LAST refresh, */
     if (g->pending <= 0) return;                                           /* so after a big jump (standing -> sitting) the first pass leaves the children wrong and the next passes pull them in */
     g->pending--;
+    if (GetTickCount() - N.t_hero < 8000 && !g->comp) { g->dirty = 1; return; }   /* a poseable component added to an NPC right after a save was loaded crashed the game: wait until the world has settled */
     if (!gp_ensure(a, m, g)) return;
     if (g->nbn != g->nb) {
         int n = 0; a->call_fn(g->mesh, "SkinnedMeshComponent", "GetNumBones", 0, NULL, NULL, NULL, &n, 4);
@@ -449,12 +450,13 @@ pc_skip.txt: comma separated name parts that are left alone (diagnosis) */
             for (int k = (nt < 8 ? nt : 7); k > pos; k--) top[k] = top[k - 1]; top[pos].e = e; top[pos].i = i; if (nt < 8) nt++;
         }
         {   /* where do the bones that the host could not report (face, ribs, scapula, radius ...) end up in the bone-driven mesh, next to the head and the spine? */
-            const char *want[] = { "Head", "neck_03", "face_C_skull", "Jaw", "helmet", "eye_l", "radius_r", "scapula_r", "chestpiece", "rib_01_l", "belt_01", "bag_r_01", "spine_05" };
+            const char *want[] = { "face_C_faceRoot", "face_C_neckRoot", "face_C_adamsApple", "face_L_neck_01", "Head", "neck_03", "face_C_skull", "Jaw", "helmet", "eye_l", "radius_r", "scapula_r", "chestpiece", "rib_01_l", "belt_01", "bag_r_01", "spine_05" };
             for (size_t w = 0; w < sizeof want / sizeof want[0]; w++) for (int i = 1; i < g->nb; i++) if (!strcmp(g->names[i], want[w])) {
                 Transform rb; memset(&rb, 0, sizeof rb); uint8_t sp2 = 2; const char *nn[2] = { "InSocketName", "TransformSpace" }; const void *vv[2] = { g->fnm[i], &sp2 }; int ss[2] = { -2, 1 };
                 a->call_fn(g->comp, "SceneComponent", "GetSocketTransform", 2, nn, vv, ss, &rb, (int)sizeof rb);
                 int16_t v[6]; memcpy(v, g->data + i * 12, 12);
-                a->log("N guest: bone #%d %s now at %.1f %.1f %.1f (host reported %s)", i, g->names[i], rb.t[0], rb.t[1], rb.t[2], (v[0] | v[1] | v[2] | v[3] | v[4] | v[5]) ? "a transform" : "nothing"); break;
+                uint8_t pf[8] = { 0 }; char pn[64] = "?"; { const char *n1[1] = { "BoneName" }; const void *v1[1] = { g->fnm[i] }; int s1[1] = { -2 }; a->call_fn(g->mesh, "SkinnedMeshComponent", "GetParentBone", 1, n1, v1, s1, pf, 8); a->fname_to_str(pf, pn, sizeof pn); }
+                a->log("N guest: bone #%d %s (parent %s) now at %.1f %.1f %.1f (host reported %s)", i, g->names[i], pn, rb.t[0], rb.t[1], rb.t[2], (v[0] | v[1] | v[2] | v[3] | v[4] | v[5]) ? "a transform" : "nothing"); break;
             }
         }
         for (int k = 0; k < nt; k++) { int i = top[k].i; int16_t v[6]; memcpy(v, g->data + i * 12, 12); a->log("N guest: after applying, bone #%d %s is %.1f off (target loc %.1f %.1f %.1f)", i, g->names[i], top[k].e, v[3] / 50.0, v[4] / 50.0, v[5] / 50.0); }
@@ -578,6 +580,9 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
         if (off && !N.off) { for (int i = 0; i < N.nm; i++) release(a, &N.m[i]); N.nm = 0; a->log("N npc module OFF"); }
         if (!off && N.off) a->log("N npc module ON");
         N.off = off; N.role = role_of();
+    }
+    if (a->hero != N.last_hero) {                                            /* a new world (save loaded): nothing of the old one may be touched, and nothing is created while it is still settling */
+        N.last_hero = a->hero; N.t_hero = now; N.nm = 0; N.nknown = 0; N.scanning = 0; N.last_scan = 0; memset(N.m, 0, sizeof N.m);
     }
     if (N.off || !a->have_remote || !a->hero) return;
     if (N.scanning || !N.last_scan || now - N.last_scan > 4000) rescan_slice(a);
