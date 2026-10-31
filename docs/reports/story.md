@@ -1,10 +1,10 @@
-﻿# Story sync 2026-10-31 18:48
+﻿# Story sync 2026-10-31 19:20
 
 6 / 6 checks passed.
 
 | Result | Check | Detail |
 |---|---|---|
-| PASS | setup: story and quest objects found in both copies | 00000222FB3CC040 0000024A770F3400 0000021EA0CF9640 000002495C15FB80 |
+| PASS | setup: story and quest objects found in both copies | 00000222F2921A80 00000224B8769A00 0000021E87074E40 00000224A0FC3340 |
 | PASS | story flag: host change reaches the guest | host set 1, guest 1 |
 | PASS | story flag: guest change reaches the host | guest set 0, host 0 |
 | PASS | quest: started on the host, running on the guest | host 2, guest 2 |

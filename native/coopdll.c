@@ -50,13 +50,44 @@ static uint64_t rd64(const void *p) { uint64_t v = 0; safe_read(p, &v, 8); retur
 static int32_t rd32(const void *p) { int32_t v = 0; safe_read(p, &v, 4); return v; }
 
 /* FName (8 bytes at name_ptr) -> utf8 */
+/* FName -> text. FName::ToString allocates a string in the engine's allocator that nobody frees here (and it does not reuse a string passed in): called millions of times by the object scans it leaked
+ * gigabytes. So every distinct name (comparison index + number, 8 bytes) is converted ONCE and the text is kept in a hash table / arena; repeated calls cost a lookup and allocate nothing. */
+#define NC_SLOTS (1 << 21)
+#define NC_ARENA (96u << 20)
+typedef struct { uint64_t key; uint32_t off; uint16_t len; uint16_t used; } NcEntry;
+static NcEntry *g_nc; static char *g_nc_arena; static size_t g_nc_used; static SRWLOCK g_nc_lock = SRWLOCK_INIT;
 static int fname_str(const void *name_ptr, char *out, int cap)
 {
-    FString s = {0};
     out[0] = 0;
+    uint64_t key = 0; if (!name_ptr || !safe_read(name_ptr, &key, 8)) return 0;
+    if (!g_nc) {
+        AcquireSRWLockExclusive(&g_nc_lock);
+        if (!g_nc) { g_nc_arena = (char *)VirtualAlloc(NULL, NC_ARENA, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE); g_nc = (NcEntry *)VirtualAlloc(NULL, sizeof(NcEntry) * NC_SLOTS, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE); }
+        ReleaseSRWLockExclusive(&g_nc_lock);
+    }
+    if (g_nc && g_nc_arena) {
+        unsigned h = (unsigned)((key * 11400714819323198485ull) >> 43) & (NC_SLOTS - 1);
+        for (int n = 0; n < 64; n++, h = (h + 1) & (NC_SLOTS - 1)) {
+            NcEntry *e = &g_nc[h];
+            if (!e->used) break;
+            if (e->key == key) { int l = e->len < cap - 1 ? e->len : cap - 1; memcpy(out, g_nc_arena + e->off, (size_t)l); out[l] = 0; return 1; }
+        }
+    }
+    FString s = {0};
     __try { g_tostring(name_ptr, &s); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
     if (!s.Data || s.Num <= 0 || s.Num > 1024) return 0;
+    char tmp[1100]; int tl = WideCharToMultiByte(CP_UTF8, 0, s.Data, -1, tmp, sizeof tmp, NULL, NULL);
     WideCharToMultiByte(CP_UTF8, 0, s.Data, -1, out, cap, NULL, NULL);
+    if (g_nc && g_nc_arena && tl > 0 && tl < 1100) {
+        AcquireSRWLockExclusive(&g_nc_lock);
+        if (g_nc_used + (size_t)tl < NC_ARENA) {
+            unsigned h = (unsigned)((key * 11400714819323198485ull) >> 43) & (NC_SLOTS - 1);
+            for (int n = 0; n < 64; n++, h = (h + 1) & (NC_SLOTS - 1)) if (!g_nc[h].used || g_nc[h].key == key) {
+                memcpy(g_nc_arena + g_nc_used, tmp, (size_t)tl); g_nc[h].key = key; g_nc[h].off = (uint32_t)g_nc_used; g_nc[h].len = (uint16_t)(tl - 1); g_nc[h].used = 1; g_nc_used += (size_t)tl; break;
+            }
+        }
+        ReleaseSRWLockExclusive(&g_nc_lock);
+    }
     return 1;
 }
 

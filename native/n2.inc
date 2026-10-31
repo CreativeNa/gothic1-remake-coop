@@ -536,7 +536,7 @@ static void set_local_extra_w(const char *text) { snprintf(T.local_extra, sizeof
 static uint8_t *find_object_w(const char *cls, const char *name, const char *outer) { return find_object(cls, name, outer); }
 static uint8_t *load_asset_w(const char *pkg, const char *asset) { return load_asset(pkg, asset); }
 /* ---- generic helper: call a UFunction whose parameters are plain ints/bools; returns the int/bool result ---- */
-static struct { char key[100]; FnInfo fi; } g_fcache[64];
+static struct { char key[100]; FnInfo fi; } g_fcache[512];
 static int g_nfcache;
 static int call_int_w(uint8_t *obj, const char *outer, const char *fn, int nargs, const int *args, int *ret)
 {
@@ -545,7 +545,7 @@ static int call_int_w(uint8_t *obj, const char *outer, const char *fn, int nargs
     FnInfo *fi = NULL;
     for (int i = 0; i < g_nfcache; i++) if (strcmp(g_fcache[i].key, key) == 0) fi = &g_fcache[i].fi;
     if (!fi) {
-        if (g_nfcache >= 64) return 0;
+        if (g_nfcache >= 512) return 0;
         snprintf(g_fcache[g_nfcache].key, sizeof g_fcache[0].key, "%s", key);
         load_fn(outer, fn, &g_fcache[g_nfcache].fi);
         fi = &g_fcache[g_nfcache++].fi;
@@ -569,7 +569,7 @@ static FnInfo *fcache_get(const char *outer, const char *fn)
 {
     char key[100]; snprintf(key, sizeof key, "%s:%s", outer, fn);
     for (int i = 0; i < g_nfcache; i++) if (strcmp(g_fcache[i].key, key) == 0) return &g_fcache[i].fi;
-    if (g_nfcache >= 64) return NULL;
+    if (g_nfcache >= 512) return NULL;
     snprintf(g_fcache[g_nfcache].key, sizeof g_fcache[0].key, "%s", key);
     load_fn(outer, fn, &g_fcache[g_nfcache].fi);
     return &g_fcache[g_nfcache++].fi;

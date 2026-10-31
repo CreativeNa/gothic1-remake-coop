@@ -29,7 +29,7 @@ typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1
 typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int16_t sc[MAXB][3]; unsigned shash; int have, dirty, pending, napplied, checked, nparent; int16_t parent[MAXB]; unsigned long t, topt, titems; uint8_t orig_col; } GPose;   /* guest: bone-driven copy of one NPC */
 typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; uint8_t last[MAXB * 12]; unsigned long next_t; int interval; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
 typedef struct { uint8_t *actor; uint32_t id; } Known;
-typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen, t_hp, t_wp; struct { uint8_t *item; char holster[64]; } wp[4]; int nwp; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
+typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen, t_hp, t_wp; struct { uint8_t *item; char holster[64]; } wp[4]; int nwp; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; unsigned long t_anim; int anim_fail; } Mirror;
 
 static struct {
     Known known[2048]; int nknown; unsigned long last_scan, last_send, last_stat;
@@ -152,6 +152,42 @@ static int clip_of(CoreAPI *a, uint8_t *o, char *name, int ncap, char *pkg, int 
     return 0;
 }
 
+
+/* All montages an AnimInstance plays at the moment: UAnimInstance keeps a TArray of FAnimMontageInstance* at +0x88 (found with the probe's miscan), whose first field is the UAnimMontage.
+ * GetCurrentActiveMontage only returns one of them, and often a run-time facial / voice montage that hides the body montage underneath. */
+static int mont_list(CoreAPI *a, uint8_t *ai, uint8_t **out, int max)
+{
+    uint8_t *data = NULL; int32_t num = 0, mx = 0;
+    if (!a->read_mem(ai + 0x88, &data, 8) || !a->read_mem(ai + 0x90, &num, 4) || !a->read_mem(ai + 0x94, &mx, 4)) return 0;
+    if (!data || num < 1 || num > 16 || mx < num || (uintptr_t)data < 0x10000) return 0;
+    int n = 0;
+    for (int e = 0; e < num && n < max; e++) {
+        uint8_t *inst = NULL, *mo = NULL; int32_t idx = 0;
+        if (!a->read_mem(data + e * 8, &inst, 8) || (uintptr_t)inst < 0x10000 || !a->read_mem(inst, &mo, 8) || (uintptr_t)mo < 0x10000) continue;
+        if (!a->read_mem(mo + 0xc, &idx, 4) || idx <= 0 || idx >= a->num_objects() || a->object_at(idx) != mo) continue;
+        out[n++] = mo;
+    }
+    return n;
+}
+static int mont_dynamic(CoreAPI *a, uint8_t *mo) { char nm[120]; a->obj_name(mo, nm, sizeof nm); return !strncmp(nm, "AnimMontage_", 12) || !strncmp(nm, "GVL_", 4); }
+
+/* the owner's body montage as "name|package": the montage asset itself (not its sequence), so the other copy can play the very same montage in the same slot of its own animation blueprint.
+ * Montages the game builds at run time (voice / facial: AnimMontage_<number>) have no asset to load and are skipped. */
+static int montage_of(CoreAPI *a, uint8_t *o, char *name, int ncap, char *pkg, int pcap)
+{
+    name[0] = pkg[0] = 0;
+    uint8_t *mesh = ptr_prop(a, o, "Mesh"); if (!mesh) return 0;
+    uint8_t *ai = ptr_prop(a, mesh, "AnimScriptInstance"); if (!ai) return 0;
+    uint8_t *ms[8]; int n = mont_list(a, ai, ms, 8);
+    for (int i = 0; i < n; i++) {
+        if (mont_dynamic(a, ms[i])) continue;
+        uint8_t *pk = NULL; a->read_mem(ms[i] + 0x20, &pk, 8); char pn[300] = ""; if (pk) a->obj_name(pk, pn, sizeof pn);
+        if (!pn[0] || !strncmp(pn, "/Engine/Transient", 17) || strstr(pn, "DialogFacials") || strstr(pn, "_Voicetypes")) continue;
+        a->obj_name(ms[i], name, ncap); snprintf(pkg, pcap, "%s", pn);
+        return 1;
+    }
+    return 0;
+}
 
 static int16_t q16(double v, double k) { double r = floor(v * k + 0.5); if (r > 32767) r = 32767; if (r < -32767) r = -32767; return (int16_t)r; }
 
@@ -289,7 +325,7 @@ static void host_tick(CoreAPI *a, unsigned long now)
               if (strstr(ec, "ItMw")) r.flags |= 4; else if (strstr(ec, "ItRw")) r.flags |= 8; }
             r.flags |= (uint8_t)((df & 1) | ((dd & 1) << 1)); r.pad = (uint8_t)(hp < 0 ? 255 : (hp > 254 ? 254 : hp)); }
         char cn[120], cp[200];
-        if (clip_of(a, o, cn, sizeof cn, cp, sizeof cp)) {
+        if (montage_of(a, o, cn, sizeof cn, cp, sizeof cp)) {
             { static char lastc[8][120]; static int nl; int seen = 0; for (int q = 0; q < nl; q++) if (!strcmp(lastc[q], cn)) seen = 1; if (!seen && nl < 8) { snprintf(lastc[nl++], 120, "%s", cn); a->log("N host: NPC clip %s (%s)", cn, cp); } }
             char both[320]; snprintf(both, sizeof both, "%s|%s", cn, cp);
             int k = -1; for (int j = 0; j < nstr; j++) if (strcmp(strs[j], both) == 0) k = j;
@@ -340,25 +376,44 @@ static Mirror *mirror_for(CoreAPI *a, uint32_t id)
 }
 
 
-/* play the host's montage clip on the frozen NPC (single-node animation), or give the animation blueprint back when the host plays none */
+/* The owner's montage is played on the mirror through its own animation instance (Montage_Play, other montages stopped): the animation blueprint keeps running, the NPC keeps its locomotion,
+ * and the mirror's own AI can no longer show something else (a different idle action, a crate it carries) than the owner does. When the owner plays no montage, the mirror's montages are stopped.
+ * (The earlier PlayAnimation on the mesh switched it to a single-node instance, which crashed and showed T-poses.) */
 static void set_anim(CoreAPI *a, Mirror *m)
 {
-    return;   /* NPC clips are NOT played any more: PlayAnimation switches the NPC's mesh to a single-node animation instance, and the game's own animation component then crashed (null read
-               * at exe+0x5ae259a, AnimSingleNodeInstance in rcx) when the guest's AI of that NPC ran an equip ability. Non-defeated NPCs are placed and given their speed only; defeated ones are bone-driven. */
     if (m->gp && m->gp->comp) return;                                         /* bone-driven NPCs do not play clips */
     uint8_t *mesh = ptr_prop(a, m->actor, "Mesh"); if (!mesh) return;
-    if (!m->anim[0]) {
-        uint8_t mode = 0; const char *n[1] = { "InAnimationMode" }; const void *v[1] = { &mode }; int s[1] = { 1 };
-        a->call_fn(mesh, "SkeletalMeshComponent", "SetAnimationMode", 1, n, v, s, NULL, 0);
+    uint8_t *ai = ptr_prop(a, mesh, "AnimScriptInstance"); if (!ai) return;
+    uint8_t *ms[8]; int n = mont_list(a, ai, ms, 8);
+    if (!m->anim[0]) {                                                         /* the owner plays no body montage: the mirror's own body montages are stopped (face / voice ones are left alone) */
+        for (int i = 0; i < n; i++) {
+            if (mont_dynamic(a, ms[i])) continue;
+            float blend = 0.25f; uint8_t *mo = ms[i]; const char *nn[2] = { "InBlendOutTime", "Montage" }; const void *v[2] = { &blend, &mo }; int sz[2] = { 4, 8 };
+            a->call_fn(ai, "AnimInstance", "Montage_Stop", 2, nn, v, sz, NULL, 0);
+        }
         return;
     }
     char nm[320], pk[320] = "-"; snprintf(nm, sizeof nm, "%s", m->anim);
     char *bar = strchr(nm, '|'); if (bar) { *bar = 0; snprintf(pk, sizeof pk, "%s", bar + 1); }
-    uint8_t *seq = a->clip_by_name(nm, pk);
-    if (!seq) { a->log("N guest: clip %s not found (pkg %s)", nm, pk); return; }
-    uint8_t lp = 1; const char *n[2] = { "NewAnimToPlay", "bLooping" }; const void *v[2] = { &seq, &lp }; int s[2] = { 8, 1 };
-    int ok = a->call_fn(mesh, "SkeletalMeshComponent", "PlayAnimation", 2, n, v, s, NULL, 0);
-    a->log("N guest: play %s -> ok=%d", nm, ok);
+    int have = 0, others = 0;
+    for (int i = 0; i < n; i++) { if (mont_dynamic(a, ms[i])) continue; char cn[120]; a->obj_name(ms[i], cn, sizeof cn); if (!strcmp(cn, nm)) have = 1; else others = 1; }
+    if (have && !others) return;                                               /* exactly the owner's montage is playing */
+    if (m->anim_fail >= 3) return;
+    uint8_t *mo = a->clip_by_name(nm, pk);
+    if (!mo) { m->anim_fail++; a->log("N guest: montage %s not found (pkg %s)", nm, pk); return; }
+    float rate = 1.0f, t0 = 0.0f; uint8_t rt = 0, sa = 1;
+    const char *n5[5] = { "MontageToPlay", "InPlayRate", "ReturnValueType", "InTimeToStartMontageAt", "bStopAllMontages" };
+    const void *v5[5] = { &mo, &rate, &rt, &t0, &sa }; int sz5[5] = { 8, 4, 1, 4, 1 };
+    float len = 0; int ok = a->call_fn(ai, "AnimInstance", "Montage_Play", 5, n5, v5, sz5, &len, 4);
+    static int logged; if (logged < 12) { logged++; a->log("N guest: montage %s -> ok=%d length %.2f", nm, ok, len); }
+}
+
+/* every 700 ms: the mirror shows the owner's montage (or none), whatever its own AI started in between */
+static void enforce_anim(CoreAPI *a, Mirror *m, unsigned long now)
+{
+    if (now - m->t_anim < 700) return; m->t_anim = now;
+    if (m->gp && m->gp->comp) return;
+    set_anim(a, m);
 }
 
 
@@ -713,7 +768,7 @@ static void guest_tick(CoreAPI *a, unsigned long now)
             m->t_hp = now; int mine = npc_health(a, m->actor);
             if (mine >= 0 && mine != m->want.pad) npc_set_health(a, m->actor, m->want.pad);
         }
-        sync_weapon_sockets(a, m, now);
+        sync_weapon_sockets(a, m, now); enforce_anim(a, m, now);
         double want[3] = { m->want.x, m->want.y, m->want.z };
         if (!m->have_cur) { memcpy(m->cur, want, sizeof want); m->have_cur = 1; }
         double dx = want[0] - m->cur[0], dy = want[1] - m->cur[1], dz = want[2] - m->cur[2], dist = sqrt(dx * dx + dy * dy + dz * dz);

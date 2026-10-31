@@ -492,6 +492,28 @@ static void run_command(char *line)
         P("%s::%s ufunction %p, Func at +0x%x = %p (exe+0x%llx), params: %s", tok[1], tok[2], fn, foff, f, (unsigned long long)(f ? f - base : 0), d);
         (void)flags; return;
     }
+    if (!strcmp(c, "miscan") && nt >= 2) {                               /* miscan <npc ptr>: where does the NPC's AnimInstance keep its list of active montage instances? (TArray of pointers to FAnimMontageInstance, whose Montage field points to a UAnimMontage) */
+        uint8_t *npc = ptr_of(tok[1]); if (!live(npc)) { P("not a live object"); return; }
+        int om = A->find_prop_offset(A->obj_class(npc), "Mesh"); uint8_t *mesh = NULL; if (om >= 0) A->read_mem(npc + om, &mesh, 8);
+        uint8_t *ai = NULL; if (mesh) { int oa = A->find_prop_offset(A->obj_class(mesh), "AnimScriptInstance"); if (oa >= 0) A->read_mem(mesh + oa, &ai, 8); }
+        if (!ai) { P("no anim instance"); return; }
+        uint8_t *cur = NULL; A->call_fn(ai, "AnimInstance", "GetCurrentActiveMontage", 0, NULL, NULL, NULL, &cur, 8);
+        char cn[120] = "none"; if (cur) A->obj_name(cur, cn, sizeof cn); P("AnimInstance %p, current active montage %p %s", ai, cur, cn);
+        for (int off = 0x40; off < 0xA00; off += 8) {
+            uint8_t *data = NULL; int32_t num = 0, mx = 0; A->read_mem(ai + off, &data, 8); A->read_mem(ai + off + 8, &num, 4); A->read_mem(ai + off + 12, &mx, 4);
+            if (!data || num < 1 || num > 12 || mx < num || mx > 64 || (uintptr_t)data < 0x10000) continue;
+            for (int e = 0; e < num; e++) {
+                uint8_t *inst = NULL; if (!A->read_mem(data + e * 8, &inst, 8) || (uintptr_t)inst < 0x10000) continue;
+                for (int f = 0; f < 0x40; f += 8) {
+                    uint8_t *mo = NULL; if (!A->read_mem(inst + f, &mo, 8) || (uintptr_t)mo < 0x10000) continue;
+                    int32_t idx = 0; if (!A->read_mem(mo + 0xc, &idx, 4) || idx <= 0 || idx >= A->num_objects() || A->object_at(idx) != mo) continue;
+                    char mn[120], mc[60]; A->obj_name(mo, mn, sizeof mn); A->obj_name(A->obj_class(mo), mc, sizeof mc);
+                    if (strstr(mc, "Montage")) P("  array @+0x%x elem %d/%d inst %p field +0x%x -> %s (%s)", off, e, num, inst, f, mn, mc);
+                }
+            }
+        }
+        P("scan done"); return;
+    }
     if (!strcmp(c, "heroinfo")) {                                        /* heroinfo: the hero's position (to put it back after a test) */
         double l[3] = { 0 }; if (!A->hero || !A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, l, 24)) { P("HEROINFO none"); return; }
         P("HEROINFO pos %.0f %.0f %.0f", l[0], l[1], l[2]); return;
@@ -514,6 +536,38 @@ static void run_command(char *line)
             shown++; P("  %p %s dist %.0f  %s", o, nm, d2, chain);
         }
         P("%d characters in total, %d shown (radius %.0f)", total, shown, rad); return;
+    }
+    if (!strcmp(c, "npcanim")) {                                        /* npcanim [radius] [max]: per NPC (same names in both copies): active montage clip, slot, carried item class, speed: to compare what the two copies show */
+        double rad = nt > 1 ? atof(tok[1]) : 2500, hp[3] = {0,0,0}; int max = nt > 2 ? atoi(tok[2]) : 40, shown = 0;
+        if (A->hero) A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hp, 24);
+        int n = A->num_objects(); char nm[160], cn[96];
+        uint8_t *gc = A->find_object(NULL, "Default__GothicCharacter", NULL); uint8_t *gcls = gc ? A->obj_class(gc) : NULL;
+        for (int i = 0; i < n && shown < max; i++) {
+            uint8_t *o = A->object_at(i); if (!o || o == A->hero || o == A->puppet) continue;
+            uint8_t *cls = A->obj_class(o); int is = 0; uint8_t *k = cls;
+            for (int d = 0; k && d < 14; d++) { if (k == gcls) { is = 1; break; } uint8_t *sup = NULL; A->read_mem(k + 0x40, &sup, 8); k = sup; }
+            if (!is) continue;
+            A->obj_name(o, nm, sizeof nm); if (!strncmp(nm, "Default__", 9) || A->read_bool(o, "bActorIsBeingDestroyed") == 1) continue;
+            double lp[3] = {0,0,0}; if (!A->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, lp, 24)) continue;
+            double dd = sqrt((lp[0]-hp[0])*(lp[0]-hp[0]) + (lp[1]-hp[1])*(lp[1]-hp[1])); if (dd > rad) continue;
+            char mont[160] = "-", slot[60] = "-", carry[96] = "-";
+            int om = A->find_prop_offset(cls, "Mesh"); uint8_t *mesh = NULL; if (om >= 0) A->read_mem(o + om, &mesh, 8);
+            uint8_t *ai = NULL; if (mesh) { int oa = A->find_prop_offset(A->obj_class(mesh), "AnimScriptInstance"); if (oa >= 0) A->read_mem(mesh + oa, &ai, 8); }
+            uint8_t *mo = NULL; if (ai) A->call_fn(ai, "AnimInstance", "GetCurrentActiveMontage", 0, NULL, NULL, NULL, &mo, 8);
+            if (mo) { A->obj_name(mo, mont, sizeof mont);
+                int ost = A->find_prop_offset(A->obj_class(mo), "SlotAnimTracks"); uint8_t *tr = NULL; int32_t nt2 = 0; if (ost >= 0) { A->read_mem(mo + ost, &tr, 8); A->read_mem(mo + ost + 8, &nt2, 4); }
+                if (tr && nt2 > 0) { A->fname_to_str(tr, slot, sizeof slot); uint8_t *segs = NULL; int32_t ns = 0; A->read_mem(tr + 8, &segs, 8); A->read_mem(tr + 16, &ns, 4);
+                    if (segs && ns > 0) { uint8_t *ref = NULL; A->read_mem(segs, &ref, 8); if (ref && A->obj_alive(ref, NULL)) { char sq[100]; A->obj_name(ref, sq, sizeof sq); strcat(mont, " seq="); strcat(mont, sq); } } } }
+            if (ai) { uint8_t *data = NULL; int32_t num = 0; A->read_mem(ai + 0x88, &data, 8); A->read_mem(ai + 0x90, &num, 4); mont[0] = 0; strcpy(slot, "-");
+                for (int e = 0; data && num > 0 && num < 12 && e < num; e++) { uint8_t *inst = NULL, *mo2 = NULL; int32_t ix = 0; if (!A->read_mem(data + e * 8, &inst, 8) || !inst || !A->read_mem(inst, &mo2, 8) || !mo2) continue;
+                    if (!A->read_mem(mo2 + 0xc, &ix, 4) || ix <= 0 || ix >= A->num_objects() || A->object_at(ix) != mo2) continue;
+                    char mn[100]; A->obj_name(mo2, mn, sizeof mn); if (!strncmp(mn, "AnimMontage_", 12)) continue; if (mont[0]) strcat(mont, "+"); strncat(mont, mn, 60); }
+                if (!mont[0]) strcpy(mont, "-"); }
+            int oc = A->find_prop_offset(cls, "m_CarryComponent"); uint8_t *cc = NULL; if (oc >= 0) A->read_mem(o + oc, &cc, 8);
+            if (cc) { int oe = A->find_prop_offset(A->obj_class(cc), "m_EquippedItem"); uint8_t *eq = NULL; if (oe >= 0) A->read_mem(cc + oe, &eq, 8); if (eq) A->obj_name(A->obj_class(eq), carry, sizeof carry); }
+            shown++; P("NPCANIM %s dist %.0f montage=%s slot=%s carry=%s", nm, dd, mont, slot, carry);
+        }
+        P("%d NPCs shown", shown); return;
     }
     if (!strcmp(c, "purge") && nt >= 2) {
         int max = nt > 2 ? atoi(tok[2]) : 1000, done = 0, skipped = 0, hidden = 0;

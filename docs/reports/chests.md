@@ -1,13 +1,13 @@
-﻿# Chest sync 2026-10-31 17:09
+﻿# Chest sync 2026-10-31 19:24
 
-6 / 6 checks passed.
+4 / 6 checks passed.
 
 | Result | Check | Detail |
 |---|---|---|
-| PASS | host->guest setup: a chest with something inside is loaded | 000001B2B50EC040 |
-| PASS | host->guest the looting copy notices the empty chest | [19788] S chest Interactive_Chest_Right_Variant_C_UAID_E89C256C6855A4DA02_1386144578 emptied here (id 8a1df0f3-e999b049) |
-| PASS | host->guest the other copy empties the same chest | [9288] S chest Interactive_Chest_Right_Variant_C_UAID_E89C256C6855A4DA02_1386144578: the other player emptied it (id 8a1df0f3-e999b049) |
-| PASS | guest->host setup: a chest with something inside is loaded | 000001AE6F44EAC0 |
-| PASS | guest->host the looting copy notices the empty chest | [9288] S chest Interactive_Chest_Right_Variant_C_UAID_E89C256C6855A5DA02_1705760755 emptied here (id c36fd06f-ad07a14a) |
-| PASS | guest->host the other copy empties the same chest | [19788] S chest Interactive_Chest_Right_Variant_C_UAID_E89C256C6855A5DA02_1705760755: the other player emptied it (id c36fd06f-ad07a14a) |
+| PASS | host->guest setup: a chest with something inside is loaded | 00000223573C5600 |
+| PASS | host->guest the looting copy notices the empty chest | [18120] S chest Interactive_Chest_Left_Variant_C_UAID_E89C256C6855AEDA02_2048115356 emptied here (id 2c5c21d0-2bd59741) |
+| PASS | host->guest the other copy empties the same chest | [20308] S chest Interactive_Chest_Left_Variant_C_UAID_E89C256C6855AEDA02_2048115356: the other player emptied it (id 2c5c21d0-2bd59741) |
+| PASS | guest->host setup: a chest with something inside is loaded | 00000225ADD30BA0 |
+| FAIL | guest->host the looting copy notices the empty chest |  |
+| FAIL | guest->host the other copy empties the same chest |  |
 

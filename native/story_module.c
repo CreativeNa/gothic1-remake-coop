@@ -36,7 +36,7 @@ static struct {
     int hist[256]; int histlogged;
     /* world items: picked up here -> removed there (matched by the persistent id every placed actor has) */
     It it[MAXI]; int nit; Gone gone[128]; int ngone; uint8_t removed[2048][16]; int nremoved;
-    uint8_t *cls_cont; int keep_birds, n_birds, fast_scan;
+    uint8_t *cls_cont; int keep_birds, n_birds, fast_scan; double hp[3]; int hp_valid;
     /* container loot: Server_ConsumeItem calls the game makes on a tracked chest's module (a player took items out) are replayed on the other copy */
     struct { uint32_t lid; uint8_t id[16]; uint8_t type; int32_t item, amount; unsigned sent; } lootq[64]; int nloot; uint32_t loot_next;
     uint32_t seen_lid[256]; int nseen;
@@ -197,11 +197,19 @@ static void add_removed(const uint8_t *id) { if (is_removed(id)) return; if (S.n
 static void idstr(const uint8_t *id, char *o) { sprintf(o, "%02x%02x%02x%02x-%02x%02x%02x%02x", id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]); }
 
 /* a few slices of the object table per second: placed world items near this hero get tracked */
+static double qpc_ms(void) { static double f; LARGE_INTEGER c; if (!f) { LARGE_INTEGER q; QueryPerformanceFrequency(&q); f = (double)q.QuadPart / 1000.0; } QueryPerformanceCounter(&c); return (double)c.QuadPart / f; }
+/* candidates that were far from the hero are not looked at again for a few seconds (thousands of world items: a position lookup for each of them every second cost ~0.7 s per second) */
+#define FAR_TAB 16384
+static struct { uint8_t *p; unsigned long until; } g_far[FAR_TAB];
+static int far_skip(uint8_t *o, unsigned long now) { unsigned h = (unsigned)(((uintptr_t)o >> 4) * 2654435761u) & (FAR_TAB - 1); for (int n = 0; n < 8; n++, h = (h + 1) & (FAR_TAB - 1)) { if (g_far[h].p == o) return now < g_far[h].until; if (!g_far[h].p) return 0; } return 0; }
+static void far_set(uint8_t *o, unsigned long until) { unsigned h = (unsigned)(((uintptr_t)o >> 4) * 2654435761u) & (FAR_TAB - 1); for (int n = 0; n < 8; n++, h = (h + 1) & (FAR_TAB - 1)) if (!g_far[h].p || g_far[h].p == o) { g_far[h].p = o; g_far[h].until = until; return; } g_far[h].p = o; g_far[h].until = until; }
 static void scan_items(CoreAPI *a, double *hp)
 {
+    unsigned long tnow = GetTickCount();
     int n = a->num_objects(); if (S.isc_pos >= n) S.isc_pos = 0;
-    int end = S.isc_pos + (S.fast_scan ? 80000 : 30000); if (end > n) end = n;                  /* tests create build\scan_fast.txt: a whole pass in about 6 s instead of 15 s (a hitch of a few frames) */
-    for (int i = S.isc_pos; i < end; i++) {
+    double tb0 = qpc_ms(), budget = S.fast_scan ? 6.0 : 1.0; int i;                          /* a time budget per frame instead of a slice per second: no hitch; tests (scan_fast.txt) allow 6 ms                  /* tests create build\scan_fast.txt: a whole pass in about 6 s instead of 15 s (a hitch of a few frames) */
+    for (i = S.isc_pos; i < n; i++) {
+        if ((i & 127) == 0 && i != S.isc_pos && qpc_ms() - tb0 > budget) break;
         uint8_t *o = a->object_at(i); if (!o) continue;
         int idoff = -1; int kind = cls_has_item(a, a->obj_class(o), &idoff); if (!kind) continue;
         if (kind == 3) {
@@ -211,12 +219,13 @@ static void scan_items(CoreAPI *a, double *hp)
             a->destroy_actor(o); S.n_birds++; if (S.n_birds <= 5 || S.n_birds % 50 == 0) a->log("S ambient bird/flock removed: %s (%d so far)", bn, S.n_birds); continue;
         }
         if (idoff < 0) continue;
+        if (far_skip(o, tnow)) continue;
         int known = 0; for (int j = 0; j < S.nit; j++) if (S.it[j].ptr == o) { known = 1; break; }
         if (known || S.nit >= MAXI) continue;
         { uint32_t fl = 0; a->read_mem(o + 8, &fl, 4); if ((fl & 0x8000) || a->read_bool(o, "bActorIsBeingDestroyed") == 1) continue; }          /* already destroyed, waiting for the garbage collector */
         char nm[96]; a->obj_name(o, nm, sizeof nm); if (!strncmp(nm, "Default__", 9)) continue;
         double p[3]; if (!loc_of(a, o, p)) continue;
-        double dx = p[0] - hp[0], dy = p[1] - hp[1]; if (dx * dx + dy * dy > 3500.0 * 3500.0) continue;
+        double dx = p[0] - hp[0], dy = p[1] - hp[1]; if (dx * dx + dy * dy > 3500.0 * 3500.0) { far_set(o, tnow + (S.fast_scan ? 4000 : 12000)); continue; }
         It *t = &S.it[S.nit]; memset(t, 0, sizeof *t); t->ptr = o; t->chest = kind == 2; snprintf(t->name, sizeof t->name, "%s", nm); a->read_mem(o + 0x18, t->fname, 8); a->read_mem(o + idoff, t->id, 16); memcpy(t->pos, p, sizeof p);
         { int zero = 1; for (int b = 0; b < 16; b++) if (t->id[b]) zero = 0;
           if (zero) {                                                                         /* spawned by the level, no persistent id: class + position (deterministic in both copies) is the key */
@@ -233,7 +242,7 @@ static void scan_items(CoreAPI *a, double *hp)
         }
         S.nit++;
     }
-    S.isc_pos = end;
+    S.isc_pos = i;
 }
 
 static void check_items(CoreAPI *a, double *hp)
@@ -383,9 +392,12 @@ static void send_blob(CoreAPI *a)
     if (nwd || nq || ni) a->log("S sent %d story words, %d quests (seq %u, size %d)", nwd, nq, S.my_seq, p);
 }
 
+static double prof_ms[8]; static int prof_n[8];
+#define PROF(i, stmt) { double t_ = qpc_ms(); stmt; double d_ = qpc_ms() - t_; prof_ms[i] += d_; if (d_ > prof_ms[7]) prof_ms[7] = d_; prof_n[i]++; }
 __declspec(dllexport) void mod_update(CoreAPI *a)
 {
     unsigned long now = GetTickCount();
+    if (S.hp_valid && S.nw && S.story && a->hero == S.last_hero && !S.off) PROF(1, scan_items(a, S.hp));          /* every frame, within a small time budget */
     if (S.scanning && !S.story) goto go;
     if (now - S.last_tick < 1000 && a->remote_blob3_seq == S.last_remote_seq) return;
     go:;
@@ -393,7 +405,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (GetFileAttributesA(BUILD "story_off.txt") != INVALID_FILE_ATTRIBUTES) { S.off = 1; return; }
     S.off = 0; S.role = role_of(); S.keep_birds = GetFileAttributesA(BUILD "ambient_keep.txt") != INVALID_FILE_ATTRIBUTES; S.fast_scan = GetFileAttributesA(BUILD "scan_fast.txt") != INVALID_FILE_ATTRIBUTES;
     if (a->hero != S.last_hero) { S.last_hero = a->hero; S.last_hero_t = now; reset_story(); S.qsys = NULL; S.nq = 0; S.scanning = 0; S.have_contact = 0; }
-    if (a->hero && now - S.last_hero_t >= 10000) obs_tick(a);                              /* works with a single copy too */
+    if (a->hero && now - S.last_hero_t >= 10000) PROF(0, obs_tick(a));                              /* works with a single copy too */
     if (!a->hero || !a->have_remote || now - S.last_hero_t < 10000) return;               /* a new world has to settle first */
     if (S.story && !same_obj(a, S.story, S.story_fn)) reset_story();
     if (S.qsys && !same_obj(a, S.qsys, S.qsys_fn)) { S.qsys = NULL; S.nq = 0; }
@@ -418,10 +430,10 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     for (int i = 0; i <= S.nw; i++) { S.cur[i] = cur[i]; if (cur[i] != S.base[i] && !S.pend[i]) { S.pend[i] = 1; S.sent[i] = 0; changed++; } else if (cur[i] != S.base[i] && S.pend[i]) { S.sent[i] = 0; } }
     int numq = 0; { uint8_t *d; (void)d; a->read_mem(S.qsys + S.arr_off + 8, &numq, 4); }
     if (numq != S.last_nq) index_quests(a);
-    for (int i = 0; i < S.nq; i++) {
+    PROF(3, for (int i = 0; i < S.nq; i++) {
         uint8_t st = 0; a->read_mem(S.q[i].ptr + S.state_off, &st, 1); S.q[i].cur = st;
         if (st != S.q[i].base) { if (!S.q[i].pend || S.q[i].sent) S.q[i].sent = 0; S.q[i].pend = 1; changed++; }
-    }
+    })
     if (!S.histlogged) {                                                                  /* one-time recon: which State values exist */
         S.histlogged = 1; memset(S.hist, 0, sizeof S.hist);
         for (int i = 0; i < S.nq; i++) S.hist[S.q[i].cur]++;
@@ -432,11 +444,13 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
             char res[120] = "", nm[160]; for (int k = 0; k < 6; k++) { uint8_t b = 9; a->call_fn(S.q[i].ptr, "Quest", fn[k], 0, NULL, NULL, NULL, &b, 1); char t[24]; snprintf(t, sizeof t, " %s=%d", fn[k], b); strcat(res, t); }
             a->obj_name(S.q[i].ptr, nm, sizeof nm); a->log("S state %d example %s:%s", v, nm, res); shown++; (void)r; } }
     }
-    { double hp[3]; if (loc_of(a, a->hero, hp)) { scan_items(a, hp); check_items(a, hp); } }
+    { double hp[3]; if (loc_of(a, a->hero, hp)) { memcpy(S.hp, hp, sizeof hp); S.hp_valid = 1; PROF(2, check_items(a, hp)); } }
     int anyp = S.ngone > 0 || S.nloot > 0; for (int i = 0; i <= S.nw && !anyp; i++) anyp = S.pend[i]; for (int i = 0; i < S.nq && !anyp; i++) anyp = S.q[i].pend;
-    if (anyp || S.ack_dirty) send_blob(a);
+    if (anyp || S.ack_dirty) PROF(4, send_blob(a));
     if (now - S.last_stat > 10000) {
         S.last_stat = now;
+        a->log("S profile (ms per call, calls, worst): obs %.2f/%d scan %.2f/%d check %.2f/%d quests %.2f/%d send %.2f/%d worst %.1f", prof_n[0] ? prof_ms[0]/prof_n[0] : 0, prof_n[0], prof_n[1] ? prof_ms[1]/prof_n[1] : 0, prof_n[1], prof_n[2] ? prof_ms[2]/prof_n[2] : 0, prof_n[2], prof_n[3] ? prof_ms[3]/prof_n[3] : 0, prof_n[3], prof_n[4] ? prof_ms[4]/prof_n[4] : 0, prof_n[4], prof_ms[7]);
+        memset(prof_ms, 0, sizeof prof_ms); memset(prof_n, 0, sizeof prof_n);
         a->log("S role %s: sent %d words / %d quests, applied %d words / %d quests, contact %d, pending %s", S.role == 1 ? "host" : "guest", S.n_sent_w, S.n_sent_q, S.n_applied_w, S.n_applied_q, S.have_contact, anyp ? "yes" : "no");
     }
     (void)changed; (void)s_ack_seen;
