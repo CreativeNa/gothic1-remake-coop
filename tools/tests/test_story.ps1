@@ -7,6 +7,8 @@ $results = New-Object System.Collections.ArrayList
 function Check($name, [bool]$ok, $detail = "") { [void]$results.Add([pscustomobject]@{ Check = $name; Result = $(if ($ok) { "PASS" } else { "FAIL" }); Detail = "$detail" }); "{0,-5} {1}  {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), $name, $detail }
 function PidOf($seat) { (Get-CimInstance Win32_Process -Filter "Name='G1R-Win64-Shipping.exe'" | Where-Object { $_.CommandLine -match "-CoopSeat=$seat(\s|$)" } | Select-Object -First 1).ProcessId }
 function Probe($seat, $cmd) { $o = & $dev probe "@$seat $cmd" 2>&1 | Out-String; $id = PidOf $seat; if (-not $id) { return "" }; (($o -split "===== game pid ") | Where-Object { $_ -match "^$id" }) -join "`n" }
+. (Join-Path $PSScriptRoot "lib.ps1")
+if ((PidOf 0) -and (PidOf 1)) { Restore-Heroes }
 function Ptr($seat, $pattern, $cls) { $m = [regex]::Match((Probe $seat "findall $pattern"), "([0-9A-F]{16}) $cls\S* \(") ; $m.Groups[1].Value }
 function Val($seat, $ptr, $prop) { $m = [regex]::Match((Probe $seat "get 0x$ptr $prop"), "= (-?\d+)\s*$", "Multiline"); if ($m.Success) { [int]$m.Groups[1].Value } else { -999 } }
 $sh = Ptr 0 "StoryG1R" "StoryG1R_"; $sg = Ptr 1 "StoryG1R" "StoryG1R_"
@@ -27,6 +29,7 @@ Probe 1 "set 0x$qg State 4" | Out-Null; Start-Sleep 4
 Check "quest: finished on the guest, finished on the host" ((Val 0 $qh "State") -eq 4) "guest $(Val 1 $qg 'State'), host $(Val 0 $qh 'State')"
 Probe 0 "set 0x$qh State $q0" | Out-Null; Start-Sleep 4                 # put it back
 Check "quest: reset on the host is reset on the guest" ((Val 1 $qg "State") -eq $q0) "guest $(Val 1 $qg 'State') (wanted $q0)"
+if ((PidOf 0) -and (PidOf 1)) { Restore-Heroes }
 $pass = @($results | Where-Object Result -eq "PASS").Count
 $dir = Join-Path $c "docs\reports"; New-Item -ItemType Directory -Force $dir | Out-Null
 $md = "# Story sync $(Get-Date -Format 'yyyy-MM-dd HH:mm')`n`n$pass / $($results.Count) checks passed.`n`n| Result | Check | Detail |`n|---|---|---|`n"

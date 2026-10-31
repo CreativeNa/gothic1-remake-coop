@@ -443,6 +443,43 @@ static void run_command(char *line)
         P("no container module found");
         return;
     }
+    if (!strcmp(c, "contdump") && nt >= 2) {                             /* contdump <chest actor ptr>: both item arrays of its container module, raw element bytes, and what the first pointer in an element is */
+        uint8_t *ch = ptr_of(tok[1]); if (!live(ch)) { P("not a live object"); return; }
+        uint8_t *dc = A->find_object(NULL, "Default__DataModule_Container", NULL); uint8_t *kc = dc ? A->obj_class(dc) : NULL;
+        int oc = A->find_prop_offset(A->obj_class(ch), "m_DataModuleComponent"); uint8_t *comp = NULL; if (oc >= 0) A->read_mem(ch + oc, &comp, 8);
+        int oa = comp ? A->find_prop_offset(A->obj_class(comp), "m_DataModules") : -1; uint8_t *arr = NULL; int num = 0;
+        if (oa >= 0) { A->read_mem(comp + oa, &arr, 8); A->read_mem(comp + oa + 8, &num, 4); }
+        for (int i = 0; arr && i < num && i < 32; i++) { uint8_t *m = NULL; A->read_mem(arr + (size_t)i * 8, &m, 8);
+            if (!m || A->obj_class(m) != kc) continue;
+            int oi = A->find_prop_offset(kc, "m_Inventory"); P("container %p, m_Inventory @%d", m, oi);
+            for (int a = 0; a < 2; a++) {
+                uint8_t *data = NULL; int n = 0, mx = 0; A->read_mem(m + oi + a * 16, &data, 8); A->read_mem(m + oi + a * 16 + 8, &n, 4); A->read_mem(m + oi + a * 16 + 12, &mx, 4);
+                P("  array %d: data %p num %d max %d", a, data, n, mx);
+                for (int e = 0; data && e < n && e < 4; e++) {
+                    uint8_t b[96]; if (!A->read_mem(data + e * 16, b, 96)) break;
+                    char h[300] = ""; for (int k = 0; k < 96; k++) { char t[4]; sprintf(t, "%02x", b[k]); strcat(h, t); if (k % 8 == 7) strcat(h, " "); }
+                    P("    elem %d @%d: %s", e, e * 16, h);
+                    for (int q = 0; q < 2; q++) for (int mk = 0; mk < 3; mk++) { uint8_t *pp; memcpy(&pp, b + q * 8, 8); pp = (uint8_t *)((uintptr_t)pp & ~(mk == 0 ? 0 : mk == 1 ? 1 : 15)); if (mk == 0) pp = (uint8_t *)((uintptr_t)pp); if ((uintptr_t)pp > 0x10000 && A->read_mem(pp + 0xc, &num, 4)) { char nn[120] = "", cn[80] = ""; if (A->obj_alive(pp, NULL)) { A->obj_name(pp, nn, sizeof nn); A->obj_name(A->obj_class(pp), cn, sizeof cn); P("      qword %d mask %d -> %p %s (%s)", q, mk, pp, nn, cn); } } }
+                }
+            }
+            return; }
+        P("no container module found");
+        return;
+    }
+    if (!strcmp(c, "peek") && nt >= 2) {                                 /* peek <addr> [bytes]: raw memory (guarded) as qwords, with the object name where a qword is a live game object */
+        uint8_t *a0 = ptr_of(tok[1]); int nb = nt > 2 ? atoi(tok[2]) : 64; if (nb > 512) nb = 512;
+        for (int off = 0; off < nb; off += 16) {
+            uint64_t q[2] = {0, 0}; if (!A->read_mem(a0 + off, q, 16)) { P("  +%d unreadable", off); break; }
+            char ex[200] = ""; for (int k = 0; k < 2; k++) { uint8_t *pp = (uint8_t *)q[k]; int32_t idx = 0; if ((uintptr_t)pp > 0x10000 && A->read_mem(pp + 0xc, &idx, 4) && idx > 0 && idx < A->num_objects() && A->object_at(idx) == pp) { char nn[100]; A->obj_name(pp, nn, sizeof nn); char t[120]; snprintf(t, sizeof t, " [q%d=%s]", k, nn); strcat(ex, t); } }
+            P("  +%03d: %016llx %016llx%s", off, (unsigned long long)q[0], (unsigned long long)q[1], ex);
+        }
+        return;
+    }
+    if (!strcmp(c, "structinfo") && nt >= 2) {                           /* structinfo <ScriptStruct name> [max]: properties of a USTRUCT (offset, type, size) */
+        uint8_t *k = A->find_object("ScriptStruct", tok[1], NULL); if (!k) { P("ScriptStruct %s not found", tok[1]); return; }
+        struct MemCtx ctx = { NULL, NULL, 0, 0, nt > 2 ? atoi(tok[2]) : 60, 1 };
+        A->list_members(k, member_cb, &ctx); P("%d props", ctx.props); return;
+    }
     if (!strcmp(c, "heroinfo")) {                                        /* heroinfo: the hero's position (to put it back after a test) */
         double l[3] = { 0 }; if (!A->hero || !A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, l, 24)) { P("HEROINFO none"); return; }
         P("HEROINFO pos %.0f %.0f %.0f", l[0], l[1], l[2]); return;

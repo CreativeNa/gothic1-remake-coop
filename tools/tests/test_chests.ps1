@@ -7,6 +7,8 @@ $results = New-Object System.Collections.ArrayList
 function Check($name, [bool]$ok, $detail = "") { [void]$results.Add([pscustomobject]@{ Check = $name; Result = $(if ($ok) { "PASS" } else { "FAIL" }); Detail = "$detail" }); "{0,-5} {1}  {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), $name, $detail }
 function PidOf($seat) { (Get-CimInstance Win32_Process -Filter "Name='G1R-Win64-Shipping.exe'" | Where-Object { $_.CommandLine -match "-CoopSeat=$seat(\s|$)" } | Select-Object -First 1).ProcessId }
 function Probe($seat, $cmd) { $o = & $dev probe "@$seat $cmd" 2>&1 | Out-String; $id = PidOf $seat; if (-not $id) { return "" }; (($o -split "===== game pid ") | Where-Object { $_ -match "^$id" }) -join "`n" }
+. (Join-Path $PSScriptRoot "lib.ps1")
+if ((PidOf 0) -and (PidOf 1)) { Restore-Heroes }
 function Hero($seat) { [regex]::Match((Probe $seat "frames"), "hero=([0-9A-F]+)").Groups[1].Value }
 if (-not ((PidOf 0) -and (PidOf 1))) { throw "start both copies first" }
 $skip = @{}
@@ -34,6 +36,7 @@ function RunOne($from, $to, $label) {
 }
 RunOne 0 1 "host->guest"
 RunOne 1 0 "guest->host"
+if ((PidOf 0) -and (PidOf 1)) { Restore-Heroes }
 $pass = @($results | Where-Object Result -eq "PASS").Count
 $dir = Join-Path $c "docs\reports"; New-Item -ItemType Directory -Force $dir | Out-Null
 $md = "# Chest sync $(Get-Date -Format 'yyyy-MM-dd HH:mm')`n`n$pass / $($results.Count) checks passed.`n`n| Result | Check | Detail |`n|---|---|---|`n"
