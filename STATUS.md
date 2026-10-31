@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-30
+Last updated: 2026-10-31
 
 ## Done
 
@@ -51,7 +51,7 @@ Last updated: 2026-10-30
   The host sends everything on first contact (the guest takes over), after that only changes, repeated until the other copy acknowledges; a conflict is won by the host.
   Live quest changes go through the game's own `StartQuest` / `SucceedQuest` / `MakeQuestAvailable` (journal, rewards of the local hero), the first bulk sync and other states are written directly.
   Quest states: 0 none, 1 available, 2 running, 3 failed, 4 succeeded.
-- Test: `tools	ests	est_story.ps1` (6 checks, both directions). Not yet verified visually: journal entries / notifications on the guest, dialogues in progress, rewards given twice.
+- Test: `tools\tests\test_story.ps1` (6 checks, both directions). Not yet verified visually: journal entries / notifications on the guest, dialogues in progress, rewards given twice.
 
 ### Not checked yet (postponed by the user, 2026-10-31)
 - Story/quests, by eye in the game: a journal entry and a notification appear on the guest when the host starts a quest; both heroes get the reward (and only once); a dialogue in progress on one copy.
@@ -62,11 +62,11 @@ Last updated: 2026-10-30
 - The story module also syncs pickups of items lying in the world: an item that gets destroyed within 450-2500 units of its hero (one at a time, not right after a teleport) is destroyed in the other copy too; if the other copy has not loaded it yet it is removed when it appears.
   Items are matched by their persistent id, or (for items the level spawns at runtime, which have none) by class + position rounded to 25 units.
 - The core's `obj_alive(ptr, name)` mis-reports objects that differ only by the number suffix of their name (the cache is per FName index); the module checks identity on the raw FName instead. Other modules still use the old call.
-- Test: `tools	ests	est_items.ps1` (8 checks, both directions).
+- Test: `tools\tests\test_items.ps1` (8 checks, both directions).
 - NOT done: chests and bodies (contents are in the actor's DataModuleComponent, not examined), items dropped by a player, trading, each hero keeps its own inventory. Not tried: a real pickup by interaction (the test destroys the actor, which is what a pickup should do; not verified).
 
 ## Chests and ambient birds (2026-10-31)
 - Chests: a chest emptied next to one hero is emptied in the other copy (the container module's two item lists get length 0; the game's own `Server_Debug_EmptyInventory` faults without authority). Partial looting (taking one item of several) is NOT synced. Bodies are not done.
-- Test: `tools	ests	est_chests.ps1` passed 6/6 right after a restart. Run back to back with the story and item tests (heroes left far from the start by the previous test) it fails: the tests need a clean restart or a "heroes back to the start" step. Not fixed.
+- Test: `tools\tests\test_chests.ps1` passed 6/6 right after a restart. Run back to back with the story and item tests (heroes left far from the start by the previous test) it fails: the tests need a clean restart or a "heroes back to the start" step. Not fixed.
 - Ambient birds (`Pidgeon_bp`, `Crow_bp`, `AmbientLifeWarningFlock`) are destroyed by the story module (`native/build/ambient_keep.txt` keeps them): three crashes at exe+0x5be3977 had their audio emitters in the stack. Whether this removes the crash is not verified.
 - The PC froze during the last long test run (two game copies, ~32 GB RAM); the run's result is unknown.
