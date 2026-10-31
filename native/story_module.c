@@ -329,6 +329,13 @@ static void cine_find(CoreAPI *a)                                               
 }
 static void cine_apply(CoreAPI *a, uint8_t type, const char *name)
 {
+    if (type == 3) {                                                                            /* the banner of a new chapter: the same GameStory call on this copy's story object */
+        if (!S.story || !same_obj(a, S.story, S.story_fn)) { a->log("S cine: chapter banner %s not shown here (no story object yet)", name); return; }
+        int32_t ch = atoi(name); const char *nn[1] = { "NewChapter" }; const void *vv[1] = { &ch }; int sz[1] = { 4 };
+        if (S.ncsupp < 8) { S.csupp[S.ncsupp].type = 3; snprintf(S.csupp[S.ncsupp].name, 48, "%s", name); S.csupp[S.ncsupp].t = GetTickCount(); S.ncsupp++; }
+        int ok = a->call_fn(S.story, "GameStory", "RequestChapterHUDNotification", 1, nn, vv, sz, NULL, 0);
+        S.n_cine_applied++; a->log("S cine: chapter banner %d shown here (%s)", ch, ok ? "ok" : "failed"); return;
+    }
     cine_find(a);
     if (!S.cine_mgr) { a->log("S cine: no cinematic manager here, %s not replayed", name); return; }
     if (S.ncsupp < 8) { S.csupp[S.ncsupp].type = type; snprintf(S.csupp[S.ncsupp].name, 48, "%s", name); S.csupp[S.ncsupp].t = GetTickCount(); S.ncsupp++; }
@@ -349,29 +356,30 @@ static void cine_apply(CoreAPI *a, uint8_t type, const char *name)
 
 /* ---- loot observer: which container functions does the game call when a player takes items? (logged for now; see docs/CHANGELOG.md) ---- */
 static const char *OBS_FNS[] = { "Server_MoveItemTo", "Server_MoveItemFromActorToOtherActor", "Server_AddAllItemsFromContainer", "Server_GetItemsFromContainerInv", "Server_PickWorldItem", "Server_ConsumeItem", "Server_AddNewItem" };
-static int obs_ready, obs_slot[8] = { -1, -1, -1, -1, -1, -1, -1, -1 }, obs_cine[4] = { -1, -1, -1, -1 };
-static const char *OBS_CINE[] = { "ForceStartCinematic", "Server_OnForceStartCinematic", "Server_OnSkipCutsceneRequest", "StopCinematicServer" };
+static int obs_ready, obs_slot[8] = { -1, -1, -1, -1, -1, -1, -1, -1 }, obs_cine[5] = { -1, -1, -1, -1, -1 };
+static const char *OBS_CINE[] = { "ForceStartCinematic", "Server_OnForceStartCinematic", "Server_OnSkipCutsceneRequest", "StopCinematicServer", "RequestChapterHUDNotification" };          /* the last one is GameStory's: the banner of a new chapter */
 static void obs_tick(CoreAPI *a)
 {
     if (!a->observe_fn) return;
     if (!obs_ready) {                                                                      /* retried until every function is found (they exist once the classes are loaded) */
         static int tries; int missing = 0;
         for (int i = 0; i < 7; i++) { if (obs_slot[i] <= 0 && !(i == 0 && obs_slot[0] == 0)) obs_slot[i] = a->observe_fn("DataModule_Container", OBS_FNS[i]); if (obs_slot[i] < 0) missing++; }
-        for (int i = 0; i < 4; i++) { if (obs_cine[i] <= 0 && !(i == 0 && obs_cine[0] == 0)) obs_cine[i] = a->observe_fn("GothicCinematicManagerSubsystem", OBS_CINE[i]); if (obs_cine[i] < 0) missing++; }
+        for (int i = 0; i < 5; i++) { if (obs_cine[i] <= 0 && !(i == 0 && obs_cine[0] == 0)) obs_cine[i] = a->observe_fn(i == 4 ? "GameStory" : "GothicCinematicManagerSubsystem", OBS_CINE[i]); if (obs_cine[i] < 0) missing++; }
         if (!missing || ++tries > 30) obs_ready = 1;
     }
     int slot, plen, hl; uint8_t *obj; uint8_t pb[192];
     while (a->obs_pop(&slot, &obj, pb, sizeof pb, &plen, &hl)) {
-        { int ci = -1; for (int i = 0; i < 4; i++) if (obs_cine[i] == slot && slot >= 0) ci = i;
+        { int ci = -1; for (int i = 0; i < 5; i++) if (obs_cine[i] == slot && slot >= 0) ci = i;
           if (ci >= 0) {                                                                          /* a cutscene call on the cinematic manager */
-              char cname[48] = ""; uint8_t type = ci == 2 ? 1 : ci == 3 ? 2 : 0;
+              char cname[48] = ""; uint8_t type = ci == 2 ? 1 : ci == 3 ? 2 : ci == 4 ? 3 : 0;
               if (type == 0 && hl && plen >= 8) { uint8_t *cl; memcpy(&cl, pb, 8); if (cl) a->obj_name(cl, cname, sizeof cname); }
+              if (type == 3 && hl && plen >= 4) { int32_t chn; memcpy(&chn, pb, 4); snprintf(cname, sizeof cname, "%d", chn); }
               a->log("S cine: %s %s (%s)", OBS_CINE[ci], cname, hl ? "params seen" : "bytecode call, no params");
-              if (obj) { S.cine_mgr = obj; a->read_mem(obj + 0x18, S.cine_fn, 8); }
+              if (obj && ci < 4) { S.cine_mgr = obj; a->read_mem(obj + 0x18, S.cine_fn, 8); }
               if (ci == 0) continue;                                                                /* ForceStartCinematic (script call) ends in Server_OnForceStartCinematic, which the game's own start path (the intro) calls directly: the inner call is the one that is sent */
               int mine = 0; unsigned long nowt = GetTickCount();
               for (int k = 0; k < S.ncsupp; k++) { if (nowt - S.csupp[k].t > 8000) { S.csupp[k] = S.csupp[--S.ncsupp]; k--; continue; } if (S.csupp[k].type == type && !strcmp(S.csupp[k].name, cname)) { mine = 1; S.csupp[k] = S.csupp[--S.ncsupp]; break; } }
-              if (!mine && !(type == 0 && !cname[0]) && S.ncine < 8) { S.cineq[S.ncine].lid = ++S.loot_next; S.cineq[S.ncine].type = type; snprintf(S.cineq[S.ncine].name, 48, "%s", cname); S.cineq[S.ncine].sent = 0; S.ncine++; S.n_cine_sent++; }
+              if (!mine && !(type == 0 && !cname[0]) && !(type == 3 && !cname[0]) && S.ncine < 8) { S.cineq[S.ncine].lid = ++S.loot_next; S.cineq[S.ncine].type = type; snprintf(S.cineq[S.ncine].name, 48, "%s", cname); S.cineq[S.ncine].sent = 0; S.ncine++; S.n_cine_sent++; }
               continue;
           } }
         const char *fn = "?"; for (int i = 0; i < 7; i++) if (obs_slot[i] == slot) fn = OBS_FNS[i];
