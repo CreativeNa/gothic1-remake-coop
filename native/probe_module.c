@@ -346,6 +346,23 @@ static void run_command(char *line)
         }
         return;
     }
+    if (!strcmp(c, "npcinfo") && nt >= 2) {                              /* npcinfo <name part>: position, yaw, defeated flag, health, speed of every NPC whose name contains the text (numbers for automated comparison between the two copies) */
+        int n = A->num_objects(), shown = 0; char nm[160], cn[96], chain[40];
+        for (int i = 0; i < n && shown < 12; i++) {
+            uint8_t *o = A->object_at(i); if (!o) continue;
+            uint8_t *cls = A->obj_class(o); if (!cls) continue;
+            int is = 0; uint8_t *k = cls; for (int d = 0; k && d < 14; d++) { A->obj_name(k, cn, sizeof cn); if (!strcmp(cn, "AIAgentCharacter")) { is = 1; break; } uint8_t *sup = NULL; A->read_mem(k + 0x40, &sup, 8); k = sup; }
+            if (!is) continue;
+            A->obj_name(o, nm, sizeof nm); if (!strncmp(nm, "Default__", 9) || !strstr(nm, tok[1])) continue;
+            double lp[3] = { 0 }, rot[3] = { 0 }; uint8_t df = 0; A->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, lp, 24); A->call_fn(o, "Actor", "K2_GetActorRotation", 0, NULL, NULL, NULL, rot, 24); A->call_fn(o, "GothicCharacter", "IsDefeated", 0, NULL, NULL, NULL, &df, 1);
+            float hp = -1; { int ops = A->find_prop_offset(A->obj_class(o), "PlayerState"); uint8_t *pst = NULL; if (ops >= 0) A->read_mem(o + ops, &pst, 8);
+                if (pst) for (int j = 0; j < n; j++) { uint8_t *q = A->object_at(j); if (!q) continue; A->obj_name(A->obj_class(q), chain, sizeof chain); if (strcmp(chain, "AttributeSet_Health")) continue; uint8_t *ou = NULL; A->read_mem(q + 0x20, &ou, 8); if (ou == pst) { A->read_mem(q + 64 + 12, &hp, 4); break; } } }
+            int ocm = A->find_prop_offset(A->obj_class(o), "Controller"); uint8_t *ctl = NULL; if (ocm >= 0) A->read_mem(o + ocm, &ctl, 8);
+            P("NPCINFO %s pos %.0f %.0f %.0f yaw %.0f defeated %d health %.0f controller %d", nm, lp[0], lp[1], lp[2], rot[1], df & 1, hp, ctl != NULL); shown++;
+        }
+        if (!shown) P("NPCINFO none matching %s", tok[1]);
+        return;
+    }
     if (!strcmp(c, "npcs")) {                                           /* characters in the world with their class chain and distance to the hero */
         double rad = nt > 1 ? atof(tok[1]) : 3000, hp[3] = {0,0,0}; int max = nt > 2 ? atoi(tok[2]) : 20, shown = 0, total = 0;
         if (A->hero) A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hp, 24);

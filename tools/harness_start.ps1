@@ -6,6 +6,9 @@ $c = Split-Path $PSScriptRoot -Parent
 $exe = "$c\game-test\G1R\Binaries\Win64\G1R-Win64-Shipping.exe"
 if (Get-Process G1R-Win64-Shipping -ErrorAction SilentlyContinue) { throw "a game is already running" }
 Remove-Item "$c\native\build\autoload_done_*.txt", "$c\native\build\cfg_*.txt" -ErrorAction SilentlyContinue
+$lg = "$c\native\build\coopdll.log"                       # one log per run: the old one is archived, so logq and the test suite only ever see this run
+if (Test-Path $lg) { New-Item -ItemType Directory -Force "$c\native\build\logs" | Out-Null; Move-Item $lg ("$c\native\build\logs\coopdll_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date)) -Force -ErrorAction SilentlyContinue }
+Remove-Item "$c\native\build\couchlink_seat*.log" -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Windows.Forms
 $s = [Windows.Forms.Screen]::PrimaryScreen.Bounds
 foreach ($seat in 0, 1) {

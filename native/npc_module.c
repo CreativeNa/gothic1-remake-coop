@@ -270,7 +270,14 @@ static void host_tick(CoreAPI *a, unsigned long now)
 /* ---- guest ---- */
 static Mirror *mirror_for(CoreAPI *a, uint32_t id)
 {
-    for (int i = 0; i < N.nm; i++) if (N.m[i].id == id) return &N.m[i];
+    for (int i = 0; i < N.nm; i++) if (N.m[i].id == id) {
+        Mirror *m = &N.m[i];
+        if (m->actor && a->obj_alive(m->actor, NULL)) return m;
+        uint8_t *act = NULL; for (int k = 0; k < N.nknown; k++) if (N.known[k].id == id) { act = N.known[k].actor; break; }   /* the NPC was destroyed and re-created (streaming): find the new actor, never touch the dead one */
+        if (!act || !a->obj_alive(act, NULL)) { m->actor = NULL; m->frozen = 0; return NULL; }
+        m->actor = act; m->frozen = 0; m->ctrl = NULL; m->gp = NULL; m->have_cur = 0; m->anim[0] = 0;
+        return m;
+    }
     if (N.nm >= MAXN) return NULL;
     uint8_t *act = NULL; for (int i = 0; i < N.nknown; i++) if (N.known[i].id == id) { act = N.known[i].actor; break; }
     if (!act || !a->obj_alive(act, NULL)) return NULL;
