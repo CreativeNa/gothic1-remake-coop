@@ -9,6 +9,7 @@ if "%WHAT%"=="anim" goto anim
 if "%WHAT%"=="equip" goto equip
 if "%WHAT%"=="pose" goto pose
 if "%WHAT%"=="npc" goto npc
+if "%WHAT%"=="story" goto story
 if "%WHAT%"=="probe" goto probe
 :anim
 cl /nologo /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /LD "%~dp0anim_module.c" /Fe:anim.dll /Fo:anim_module.obj || exit /b 1
@@ -22,5 +23,8 @@ if "%WHAT%"=="pose" exit /b 0
 :npc
 cl /nologo /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /LD "%~dp0npc_module.c" /Fe:npc.dll /Fo:npc_module.obj || exit /b 1
 if "%WHAT%"=="npc" exit /b 0
+:story
+cl /nologo /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /LD "%~dp0story_module.c" /Fe:story.dll /Fo:story_module.obj || exit /b 1
+if "%WHAT%"=="story" exit /b 0
 :probe
 cl /nologo /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /LD "%~dp0probe_module.c" /Fe:probe.dll /Fo:probe_module.obj || exit /b 1

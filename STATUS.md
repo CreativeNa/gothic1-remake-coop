@@ -45,3 +45,10 @@ Last updated: 2026-10-30
 1. Test direct IP between two PCs, then pose compression.
 2. Puppet polish (face, arrows, more food items).
 3. NPC / enemy mirroring for shared fights.
+
+## Story and quests (2026-10-31)
+- `native/story_module.c` (core 51, third channel `S|`): the whole story object (`StoryG1R`, ~520 int / time words incl. the chapter) and the `State` of all 679 quests are kept equal in both copies.
+  The host sends everything on first contact (the guest takes over), after that only changes, repeated until the other copy acknowledges; a conflict is won by the host.
+  Live quest changes go through the game's own `StartQuest` / `SucceedQuest` / `MakeQuestAvailable` (journal, rewards of the local hero), the first bulk sync and other states are written directly.
+  Quest states: 0 none, 1 available, 2 running, 3 failed, 4 succeeded.
+- Test: `tools	ests	est_story.ps1` (6 checks, both directions). Not yet verified visually: journal entries / notifications on the guest, dialogues in progress, rewards given twice.

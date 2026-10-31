@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define COREAPI_VERSION 9
+#define COREAPI_VERSION 10
 
 typedef struct CoreAPI {
     int version;
@@ -87,6 +87,10 @@ typedef struct CoreAPI {
     /* v9: second binary channel (shared world: NPC states), same rules as the first one */
     void (*set_local_blob2)(const void *data, int len);
     const uint8_t *remote_blob2; int remote_blob2_len; int remote_blob2_seq;
+
+    /* v10: third channel (story flags, quest states); a blob set here is sent once */
+    void (*set_local_blob3)(const void *data, int len);
+    const uint8_t *remote_blob3; int remote_blob3_len; int remote_blob3_seq;
 } CoreAPI;
 
 /* exports of a module */

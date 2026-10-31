@@ -384,15 +384,15 @@ static void freeze_at_end(uint8_t *seq)
 /* ================= hot-reloadable modules (modules\<name>.dll) ================= */
 #include "coreapi.h"
 static CoreAPI g_api;
-#define MAX_MODS 6
+#define MAX_MODS 8
 static struct ModSlot {
     const char *name;
     HMODULE h; ModUpdate_t update; ModShutdown_t shutdown; ModInit_t init;
     FILETIME mtime; int serial; int need_init; char loaded_path[MAX_PATH];
     double cost_sum, cost_max; int cost_n;      /* mod_update cost in ms since the last log line */
     int always;                 /* 1: called every engine tick (menu, loading screens, no friend needed); 0: only while the puppet exists */
-} g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "npc" }, { .name = "probe", .always = 1 } };
-static int g_nmods = 5;
+} g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "npc" }, { .name = "story" }, { .name = "probe", .always = 1 } };
+static int g_nmods = 6;
 
 static double seq_length_w(uint8_t *seq)
 {
@@ -645,8 +645,10 @@ static uint8_t g_rblob2[BLOB_MAX], g_rasm2[BLOB_MAX]; static int g_rblob2_len, g
  * a blob is complete when all its chunks have arrived (in any order), and an older blob is never delivered after a newer one. */
 typedef struct { int seq, count, got, lastlen; uint32_t mask[8]; unsigned long t; uint8_t data[BLOB_MAX]; } BlobAsm;
 typedef struct { BlobAsm a[4]; int last_seq; int have_last; } BlobRing;
-static BlobRing g_ring_b, g_ring_n;
-static uint8_t g_send_seq_b, g_send_seq_n;
+static BlobRing g_ring_b, g_ring_n, g_ring_s;
+static uint8_t g_send_seq_b, g_send_seq_n, g_send_seq_s;
+static uint8_t g_lblob3[BLOB_MAX]; static int g_lblob3_len;                          /* third channel (story flags and quest states), 'S|' chunks, sent once per set_local_blob3 */
+static uint8_t g_rblob3[BLOB_MAX]; static int g_rblob3_len, g_rblob3_seq;
 static int ring_feed(BlobRing *r, const uint8_t *rx, int n, uint8_t *out, int *outlen)
 {
     if (n <= 5) return 0;
@@ -671,6 +673,7 @@ static int ring_feed(BlobRing *r, const uint8_t *rx, int n, uint8_t *out, int *o
     r->last_seq = seq; r->have_last = 1; memcpy(out, a->data, (size_t)len); *outlen = len; return 1;
 }
 
+static void set_local_blob3_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob3) len = 0; memcpy(g_lblob3, d, (size_t)len); g_lblob3_len = len; }
 static void set_local_blob2_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob2) len = 0; memcpy(g_lblob2, d, (size_t)len); g_lblob2_len = len; }
 static void set_local_blob_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob) len = 0; memcpy(g_lblob, d, (size_t)len); g_lblob_len = len; }
 
@@ -739,7 +742,7 @@ static void api_init(void)
     g_api.remote_extra = T.remote_extra;
     g_api.call_fn = call_fn_w;
     g_api.set_local_blob = set_local_blob_w;
-    g_api.set_local_blob2 = set_local_blob2_w; g_api.remote_blob2 = g_rblob2;
+    g_api.set_local_blob3 = set_local_blob3_w; g_api.remote_blob3 = g_rblob3; g_api.set_local_blob2 = set_local_blob2_w; g_api.remote_blob2 = g_rblob2;
     g_api.set_attach_target = set_attach_target_w;
     g_api.remote_blob = g_rblob;
     g_api.list_members = list_members_w;
@@ -792,7 +795,7 @@ static void module_run(int always)
     g_api.crouched = T.rcrouch;
     g_api.action = T.ract; g_api.action_pkg = T.rpkg; g_api.fall_since = T.fall_since;
     g_api.hero = T.hero; g_api.puppet = T.marker; g_api.puppet_mesh = T.skcomp;
-    g_api.remote_blob_len = g_rblob_len; g_api.remote_blob_seq = g_rblob_seq; g_api.attach_gen = g_attach_gen; g_api.remote_blob2_len = g_rblob2_len; g_api.remote_blob2_seq = g_rblob2_seq;
+    g_api.remote_blob_len = g_rblob_len; g_api.remote_blob_seq = g_rblob_seq; g_api.attach_gen = g_attach_gen; g_api.remote_blob3_len = g_rblob3_len; g_api.remote_blob3_seq = g_rblob3_seq; g_api.remote_blob2_len = g_rblob2_len; g_api.remote_blob2_seq = g_rblob2_seq;
     for (int i = 0; i < g_nmods; i++) {
         struct ModSlot *m = &g_mods[i];
         if (m->always != always) continue;
@@ -1157,6 +1160,15 @@ static void frame_work(void)
                     sendto(T.sock, (const char *)bm, pl + 5, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
                 }
             }
+            if (g_lblob3_len > 0) {
+                int count = (g_lblob3_len + BLOB_CHUNK - 1) / BLOB_CHUNK; g_send_seq_s++;
+                for (int k = 0; k < count; k++) {
+                    uint8_t bm[BLOB_CHUNK + 8]; int pl = g_lblob3_len - k * BLOB_CHUNK; if (pl > BLOB_CHUNK) pl = BLOB_CHUNK;
+                    bm[0] = 'S'; bm[1] = '|'; bm[2] = (uint8_t)k; bm[3] = (uint8_t)count; bm[4] = g_send_seq_s; memcpy(bm + 5, g_lblob3 + k * BLOB_CHUNK, (size_t)pl);
+                    sendto(T.sock, (const char *)bm, pl + 5, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
+                }
+                g_lblob3_len = 0;
+            }
         }
         if (T.net_ok && !T.have_remote && T.frame % 600 == 0) logf_("net: still waiting for the first packet from the friend (check the address, the port and the firewall)");
         if (T.net_ok) {
@@ -1173,6 +1185,11 @@ static void frame_work(void)
                 if (n > 5 && rx[0] == 'B' && rx[1] == '|') {
                     uint8_t ob[BLOB_MAX]; int ol = 0;
                     if (ring_feed(&g_ring_b, (const uint8_t *)rx, n, ob, &ol)) { memcpy(g_rblob, ob, (size_t)ol); g_rblob_len = ol; g_rblob_seq++; }
+                    continue;
+                }
+                if (n > 5 && rx[0] == 'S' && rx[1] == '|') {
+                    uint8_t ob[BLOB_MAX]; int ol = 0;
+                    if (ring_feed(&g_ring_s, (const uint8_t *)rx, n, ob, &ol)) { memcpy(g_rblob3, ob, (size_t)ol); g_rblob3_len = ol; g_rblob3_seq++; }
                     continue;
                 }
                 if (n > 5 && rx[0] == 'N' && rx[1] == '|') {
