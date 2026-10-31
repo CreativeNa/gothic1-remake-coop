@@ -524,6 +524,8 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (!S.nw) init_story(a);
     if (!S.nq) index_quests(a);
     if (!S.nw) return;
+    { const char *rf = S.role == 1 ? BUILD "chapter_reset_h.txt" : BUILD "chapter_reset_g.txt";      /* test aid: puts the chapter back to 0 on this copy (the file is removed), so the banner of the first chapter can be provoked again */
+      if (GetFileAttributesA(rf) != INVALID_FILE_ATTRIBUTES && S.chap_off >= 0) { DeleteFileA(rf); int32_t was = 0, z = 0; a->read_mem(S.story + S.chap_off, &was, 4); a->write_mem(S.story + S.chap_off, &z, 4); S.cur[S.nw] = 0; S.base[S.nw] = 0; S.pend[S.nw] = 0; a->log("S chapter reset: %d -> 0 on this copy (test aid)", was); } }
     /* the other copy's changes first */
     if (a->remote_blob3_seq != S.last_remote_seq) {
         S.last_remote_seq = a->remote_blob3_seq;
