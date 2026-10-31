@@ -26,7 +26,7 @@ typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_
 #pragma pack(pop)
 
 typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1; } Transform;   /* FTransform: FQuat, translation, scale */
-typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int16_t sc[MAXB][3]; unsigned shash; int have, dirty, pending, napplied, checked; unsigned long t, topt, titems; uint8_t orig_col; } GPose;   /* guest: bone-driven copy of one NPC */
+typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int16_t sc[MAXB][3]; unsigned shash; int have, dirty, pending, napplied, checked, nparent; int16_t parent[MAXB]; unsigned long t, topt, titems; uint8_t orig_col; } GPose;   /* guest: bone-driven copy of one NPC */
 typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; uint8_t last[MAXB * 12]; unsigned long next_t; int interval; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
 typedef struct { uint8_t *actor; uint32_t id; } Known;
 typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
@@ -360,6 +360,39 @@ static int npc_skip_has(const char *name)
     return 0;
 }
 
+typedef struct { double r[9]; double t[3]; } Xf;                       /* p' = R p + t */
+static void q2m(const double *q, double *m)
+{
+    double x = q[0], y = q[1], z = q[2], w = q[3], n = sqrt(x * x + y * y + z * z + w * w); if (n < 1e-9) { x = y = z = 0; w = 1; n = 1; }
+    x /= n; y /= n; z /= n; w /= n;
+    m[0] = 1 - 2 * (y * y + z * z); m[1] = 2 * (x * y - z * w);     m[2] = 2 * (x * z + y * w);
+    m[3] = 2 * (x * y + z * w);     m[4] = 1 - 2 * (x * x + z * z); m[5] = 2 * (y * z - x * w);
+    m[6] = 2 * (x * z - y * w);     m[7] = 2 * (y * z + x * w);     m[8] = 1 - 2 * (x * x + y * y);
+}
+static void m2q(const double *m, double *q)
+{
+    double tr = m[0] + m[4] + m[8], x, y, z, w;
+    if (tr > 0) { double sq = sqrt(tr + 1.0) * 2; w = 0.25 * sq; x = (m[7] - m[5]) / sq; y = (m[2] - m[6]) / sq; z = (m[3] - m[1]) / sq; }
+    else if (m[0] > m[4] && m[0] > m[8]) { double sq = sqrt(1.0 + m[0] - m[4] - m[8]) * 2; w = (m[7] - m[5]) / sq; x = 0.25 * sq; y = (m[1] + m[3]) / sq; z = (m[2] + m[6]) / sq; }
+    else if (m[4] > m[8]) { double sq = sqrt(1.0 + m[4] - m[0] - m[8]) * 2; w = (m[2] - m[6]) / sq; x = (m[1] + m[3]) / sq; y = 0.25 * sq; z = (m[5] + m[7]) / sq; }
+    else { double sq = sqrt(1.0 + m[8] - m[0] - m[4]) * 2; w = (m[3] - m[1]) / sq; x = (m[2] + m[6]) / sq; y = (m[5] + m[7]) / sq; z = 0.25 * sq; }
+    double n = sqrt(x * x + y * y + z * z + w * w); if (n < 1e-9) { q[0] = q[1] = q[2] = 0; q[3] = 1; return; }
+    q[0] = x / n; q[1] = y / n; q[2] = z / n; q[3] = w / n;
+}
+static Xf xf_mul(const Xf *a, const Xf *b)                              /* a * b: a first, then b */
+{
+    Xf o; for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) o.r[i * 3 + j] = b->r[i * 3] * a->r[j] + b->r[i * 3 + 1] * a->r[3 + j] + b->r[i * 3 + 2] * a->r[6 + j];
+    for (int i = 0; i < 3; i++) o.t[i] = b->r[i * 3] * a->t[0] + b->r[i * 3 + 1] * a->t[1] + b->r[i * 3 + 2] * a->t[2] + b->t[i];
+    return o;
+}
+static Xf xf_inv(const Xf *a)
+{
+    Xf o; for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) o.r[i * 3 + j] = a->r[j * 3 + i];
+    for (int i = 0; i < 3; i++) o.t[i] = -(o.r[i * 3] * a->t[0] + o.r[i * 3 + 1] * a->t[1] + o.r[i * 3 + 2] * a->t[2]);
+    return o;
+}
+static Xf xf_from(const double *q, const double *t) { Xf o; q2m(q, o.r); o.t[0] = t[0]; o.t[1] = t[1]; o.t[2] = t[2]; return o; }
+
 /* ---- guest: bone-driven NPC (a PoseableMeshComponent with the NPC's own mesh asset, the original mesh hidden) ---- */
 static void gp_drop(CoreAPI *a, Mirror *m)
 {
@@ -411,7 +444,7 @@ static int gp_ensure(CoreAPI *a, Mirror *m, GPose *g)
         { const char *nn[1] = { "NewType" }; const void *vv[1] = { &no }; int ss[1] = { 1 }; a->call_fn(mesh, "PrimitiveComponent", "SetCollisionEnabled", 1, nn, vv, ss, NULL, 0); }
         { const char *nn[1] = { "bEnabled" }; const void *vv[1] = { &ten }; int ss[1] = { 1 }; a->call_fn(mesh, "ActorComponent", "SetComponentTickEnabled", 1, nn, vv, ss, NULL, 0); }
     }
-    g->comp = comp; g->mesh = mesh; g->nbn = 0; g->napplied = 0;
+    g->comp = comp; g->mesh = mesh; g->nbn = 0; g->napplied = 0; g->nparent = 0;
     { int mv = reparent_items(a, mesh, comp, m->actor); if (mv) a->log("N guest: %d item(s) of NPC %p moved to its bone-driven mesh", mv, m->actor); }
     a->log("N guest: NPC %p now bone-driven (poseable %p)", m->actor, comp);
     return 1;
@@ -420,7 +453,7 @@ static void gp_apply(CoreAPI *a, Mirror *m)
 {
     GPose *g = m->gp; if (!g || g->bad) return;
     if (g->comp && g->mesh && GetTickCount() - g->titems > 1000) { g->titems = GetTickCount(); if (a->obj_alive(g->comp, NULL) && a->obj_alive(g->mesh, NULL)) { int mv = reparent_items(a, g->mesh, g->comp, m->actor); if (mv) a->log("N guest: %d new item(s) of NPC %p moved to its bone-driven mesh", mv, m->actor); } }
-    if (g->dirty) { g->dirty = 0; g->pending = g->napplied ? 10 : 36; }       /* the bone hierarchy is ~15 levels deep and each pass fixes one more level */                          /* a pose is applied over several frames in a row: SetBoneTransformByName converts a bone through its parent's pose of the LAST refresh, */
+    if (g->dirty) { g->dirty = 0; g->pending = g->napplied ? 2 : 3; }       /* the bone hierarchy is ~15 levels deep and each pass fixes one more level */                          /* a pose is applied over several frames in a row: SetBoneTransformByName converts a bone through its parent's pose of the LAST refresh, */
     if (g->pending <= 0) return;                                           /* so after a big jump (standing -> sitting) the first pass leaves the children wrong and the next passes pull them in */
     g->pending--;
     if (GetTickCount() - N.t_hero < 8000 && !g->comp) { g->dirty = 1; return; }   /* a poseable component added to an NPC right after a save was loaded crashed the game: wait until the world has settled */
@@ -431,15 +464,41 @@ static void gp_apply(CoreAPI *a, Mirror *m)
         for (int i = 0; i < n; i++) { const char *nn[1] = { "BoneIndex" }; const void *vv[1] = { &i }; int ss[1] = { 4 }; a->call_fn(g->mesh, "SkinnedMeshComponent", "GetBoneName", 1, nn, vv, ss, g->fnm[i], 8); a->fname_to_str(g->fnm[i], g->names[i], 48); }
         g->nbn = n;
     }
-    for (int i = 0; i < g->nb; i++) {
+    /* Exact application. SetBoneTransformByName(ComponentSpace) turns a bone into a local transform through its parent's pose of the LAST refresh (the cache).
+     * So for every bone we hand it  T_i * T_parent^-1 * C_parent  (T = wanted pose, C = what the mesh shows now): the engine's conversion then yields exactly the wanted local
+     * transform, and after one refresh every bone sits where the host had it, however big the jump (falling, getting up). Bones that are not set follow their parent: their wanted pose is predicted. */
+    if (!g->nparent) {
+        for (int i = 0; i < g->nb; i++) {
+            uint8_t pf[8] = { 0 }; char pn[64] = ""; g->parent[i] = -1;
+            const char *n1[1] = { "BoneName" }; const void *v1[1] = { g->fnm[i] }; int s1[1] = { -2 };
+            a->call_fn(g->mesh, "SkinnedMeshComponent", "GetParentBone", 1, n1, v1, s1, pf, 8); a->fname_to_str(pf, pn, sizeof pn);
+            if (i > 0) for (int j = 0; j < i; j++) if (strcmp(g->names[j], pn) == 0) { g->parent[i] = (int16_t)j; break; }
+        }
+        g->nparent = 1;
+    }
+    static Xf C[MAXB], T[MAXB]; static uint8_t given[MAXB];
+    for (int i = 0; i < g->nb; i++) {                                         /* what the bone-driven mesh shows now (component space) */
+        Transform rb; memset(&rb, 0, sizeof rb); rb.q[3] = 1; uint8_t sp2 = 2; const char *nn[2] = { "InSocketName", "TransformSpace" }; const void *vv[2] = { g->fnm[i], &sp2 }; int ss[2] = { -2, 1 };
+        a->call_fn(g->comp, "SceneComponent", "GetSocketTransform", 2, nn, vv, ss, &rb, (int)sizeof rb);
+        C[i] = xf_from(rb.q, rb.t);
+    }
+    for (int i = 0; i < g->nb; i++) {                                         /* the wanted pose: the host's value, or (not set) the current local transform carried onto the wanted parent */
         int16_t v[6]; memcpy(v, g->data + i * 12, 12);
-        if (0 && g->napplied == g->nb && memcmp(g->applied + i * 12, g->data + i * 12, 12) == 0) continue;     /* skipping "unchanged" bones left a bone behind when its parent moved */     /* this bone did not change: no engine call */
-        if (strncmp(g->names[i], "ik_", 3) == 0) continue;
-        if (npc_skip_has(g->names[i])) continue;                                       /* build
-pc_skip.txt: comma separated name parts that are left alone (diagnosis) */
-        if (i > 0 && !(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) continue;
-        double x = v[0] / 32767.0, y = v[1] / 32767.0, z = v[2] / 32767.0, w2 = 1.0 - x * x - y * y - z * z;
-        Transform tr; memset(&tr, 0, sizeof tr); tr.q[0] = x; tr.q[1] = y; tr.q[2] = z; tr.q[3] = w2 > 0 ? sqrt(w2) : 0; tr.t[0] = v[3] / 50.0; tr.t[1] = v[4] / 50.0; tr.t[2] = v[5] / 50.0; tr.s[0] = g->sc[i][0] / 1000.0; tr.s[1] = g->sc[i][1] / 1000.0; tr.s[2] = g->sc[i][2] / 1000.0;
+        int skip = strncmp(g->names[i], "ik_", 3) == 0 || npc_skip_has(g->names[i]) || (i > 0 && !(v[0] | v[1] | v[2] | v[3] | v[4] | v[5]));
+        given[i] = (uint8_t)!skip;
+        if (!skip) {
+            double x = v[0] / 32767.0, y = v[1] / 32767.0, z = v[2] / 32767.0, w2 = 1.0 - x * x - y * y - z * z, q[4] = { x, y, z, w2 > 0 ? sqrt(w2) : 0 }, t[3] = { v[3] / 50.0, v[4] / 50.0, v[5] / 50.0 };
+            T[i] = xf_from(q, t);
+        } else if (g->parent[i] < 0) T[i] = C[i];
+        else { Xf pinv = xf_inv(&C[g->parent[i]]); Xf local = xf_mul(&C[i], &pinv); T[i] = xf_mul(&local, &T[g->parent[i]]); }
+    }
+    for (int i = 0; i < g->nb; i++) {
+        if (!given[i]) continue;
+        Xf out = T[i];
+        if (g->parent[i] >= 0) { Xf pinv = xf_inv(&T[g->parent[i]]); Xf loc = xf_mul(&T[i], &pinv); out = xf_mul(&loc, &C[g->parent[i]]); }
+        double q[4]; m2q(out.r, q);
+        Transform tr; memset(&tr, 0, sizeof tr); tr.q[0] = q[0]; tr.q[1] = q[1]; tr.q[2] = q[2]; tr.q[3] = q[3]; tr.t[0] = out.t[0]; tr.t[1] = out.t[1]; tr.t[2] = out.t[2];
+        tr.s[0] = g->sc[i][0] / 1000.0; tr.s[1] = g->sc[i][1] / 1000.0; tr.s[2] = g->sc[i][2] / 1000.0;
         uint8_t space = 1;                                                    /* EBoneSpaces::ComponentSpace */
         const char *names[3] = { "BoneName", "InTransform", "BoneSpace" }; const void *vals[3] = { g->fnm[i], &tr, &space }; int sizes[3] = { -2, (int)sizeof tr, 1 };
         a->call_fn(g->comp, "PoseableMeshComponent", "SetBoneTransformByName", 3, names, vals, sizes, NULL, 0);
