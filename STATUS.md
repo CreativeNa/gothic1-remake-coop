@@ -2,6 +2,10 @@
 
 Last updated: 2026-10-31
 
+> **Important note on testing.** Most of the changes described here were **not tested in real play situations**. Everything was developed and checked only with two copies of the game on **one PC**, mostly through automated scripts and synthetic actions (teleports, destroying an actor instead of a real pickup, direct state writes), not by people playing together. Real two-PC / internet play, long sessions and many ordinary game situations (dialogues, trading, normal looting, longer fights, save / load cycles) have not been exercised. Treat every feature as an experimental first version that **needs further work and real-world testing**.
+
+> **Важно о тестировании.** Большая часть изменений **не проверялась в реальных игровых ситуациях**. Всё разрабатывалось и проверялось только на двух копиях игры на **одном компьютере**, в основном автоматическими скриптами и искусственными действиями (телепорты, удаление объекта вместо настоящего подбора, прямая запись состояний), а не живой игрой вдвоём. Игра по сети между двумя ПК, долгие сессии и обычные игровые ситуации не проверялись. Каждая функция — экспериментальная первая версия, которая **требует доработки и проверки в реальных условиях**.
+
 ## Done
 
 - Native DLL injection, engine access by fixed RVAs, game-thread hook, ProcessEvent calls.
