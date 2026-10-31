@@ -504,9 +504,9 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     unsigned long now = GetTickCount();
     if (S.hp_valid && S.nw && S.story && a->hero == S.last_hero && !S.off) PROF(1, scan_items(a, S.hp));          /* every frame, within a small time budget */
     if (S.scanning && !S.story) goto go;
-    if (now - S.last_tick < 1000 && a->remote_blob3_seq == S.last_remote_seq) return;
+    if (now - S.last_tick < 200 && a->remote_blob3_seq == S.last_remote_seq) return;   /* 5 times a second (was once): the chapter banner and the item pickups reach the other copy within ~0.2 s */
     go:;
-    int fresh = now - S.last_tick >= 1000; if (fresh) S.last_tick = now;
+    int fresh = now - S.last_tick >= 200; if (fresh) S.last_tick = now;
     if (GetFileAttributesA(BUILD "story_off.txt") != INVALID_FILE_ATTRIBUTES) { S.off = 1; return; }
     S.off = 0; S.role = role_of(); S.keep_birds = GetFileAttributesA(BUILD "ambient_keep.txt") != INVALID_FILE_ATTRIBUTES; S.fast_scan = GetFileAttributesA(BUILD "scan_fast.txt") != INVALID_FILE_ATTRIBUTES;
     if (a->hero != S.last_hero) { S.last_hero = a->hero; S.last_hero_t = now; reset_story(); S.qsys = NULL; S.nq = 0; S.scanning = 0; S.have_contact = 0; }

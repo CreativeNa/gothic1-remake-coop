@@ -916,6 +916,13 @@ static void module_run(int always)
     }
 }
 
+static int g_puppet_hid;                                  /* the puppet is hidden while the friend is not in the world (menu, loading) */
+static void puppet_hide(int h)
+{
+    if (!T.marker || !T.puppet_char || !T.sethidden.fn) return;
+    uint8_t v = (uint8_t)h, *b = pnew(&T.sethidden); pset(&T.sethidden, b, "bNewHidden", &v, 1); pcall(T.marker, &T.sethidden, b); _aligned_free(b);
+    g_puppet_hid = h; logf_("N3 puppet %s", h ? "hidden (the friend is not in the world)" : "shown (the friend is in the world)");
+}
 static void module_frame(void)  { module_run(0); }     /* modules that need the puppet */
 static void module_always(void)  { module_run(1); }     /* modules that run every tick */
 
@@ -926,7 +933,7 @@ static void frame_work(void)
     /* the hero object can die on level load: re-resolve (marker belonged to the old level too) */
     if (T.step >= 1 && T.step != 99 && get_object(T.hero_idx) != T.hero) {
         logf_("N3 hero changed, re-resolving");
-        T.hero = NULL; T.marker = NULL; T.step = 0; T.have_remote = 0;
+        T.hero = NULL; T.marker = NULL; T.step = 0; T.have_remote = 0; g_puppet_hid = 0;
     }
     switch (T.step) {
     case 0: {   /* resolve everything */
@@ -1160,8 +1167,8 @@ static void frame_work(void)
         if (T.puppet_char) {
             uint8_t no = 0, nocoll = 0;
             uint8_t *b = pnew(&T.sethidden);
-            pset(&T.sethidden, b, "bNewHidden", &no, 1);
-            logf_("N4 SetActorHiddenInGame(false) ok=%d", pcall(T.marker, &T.sethidden, b)); _aligned_free(b);
+            { uint8_t hid = 1; (void)no; pset(&T.sethidden, b, "bNewHidden", &hid, 1); g_puppet_hid = 1; }
+            logf_("N4 SetActorHiddenInGame(hidden until the friend is there) ok=%d", pcall(T.marker, &T.sethidden, b)); _aligned_free(b);
             b = pnew(&T.setcoll);
             pset(&T.setcoll, b, "bNewActorEnableCollision", &nocoll, 1);
             logf_("N4 SetActorEnableCollision(false) ok=%d", pcall(T.marker, &T.setcoll, b)); _aligned_free(b);
@@ -1326,9 +1333,11 @@ static void frame_work(void)
                     T.rpos[0] = x; T.rpos[1] = y; T.rpos[2] = z; T.ryaw = yaw;
                     if (!T.have_remote) { T.shown[0] = x; T.shown[1] = y; T.shown[2] = z; logf_("N3 first packet from %s at %.0f %.0f %.0f", pid, x, y, z); }
                     T.have_remote = 1;
+                    if (g_puppet_hid) { T.shown[0] = x; T.shown[1] = y; T.shown[2] = z; puppet_hide(0); }
                 }
             }
         }
+        if (T.have_remote && T.marker && !g_puppet_hid && GetTickCount() - T.last_rt > 3000) puppet_hide(1);
         if (T.have_remote && T.marker && T.puppet_char == 2 && T.skcomp && T.playanim.fn) module_frame();
         if (T.have_remote && T.marker) {
             for (int k = 0; k < 3; k++) T.shown[k] += (T.rpos[k] - T.shown[k]) * 0.35;   /* smooth 20 Hz data */
