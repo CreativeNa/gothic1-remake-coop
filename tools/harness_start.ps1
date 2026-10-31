@@ -1,7 +1,7 @@
 # Test harness: starts BOTH coop copies without CouchLink (seat 0 = host, seat 1 = guest), side by side on the primary monitor,
 # and the per-seat helper that injects the newest coopdll. Autoload takes them into the newest save.
 # Afterwards use tools\harness.ps1 (wait / shot / probe) to drive and to look at the game without a human.
-param([int]$W = 800, [int]$H = 450, [int[]]$Seats = @(0, 1), [switch]$NoWatchdog, [switch]$Lite, [switch]$Add)   # watchdog.ps1 keeps the PC usable (priority, RAM / CPU limits). Do NOT start the game with -nosound: fmodstudio.dll then crashes (null read) a few seconds after the start         # -Seats 0 starts only the host copy (half the memory, enough for probing the game)
+param([int]$W = 800, [int]$H = 450, [int[]]$Seats = @(0, 1), [switch]$NoWatchdog, [switch]$Lite, [switch]$Add, [switch]$Gate)   # watchdog.ps1 keeps the PC usable (priority, RAM / CPU limits). Do NOT start the game with -nosound: fmodstudio.dll then crashes (null read) a few seconds after the start         # -Seats 0 starts only the host copy (half the memory, enough for probing the game)
 $c = Split-Path $PSScriptRoot -Parent
 $exe = "$c\game-test\G1R\Binaries\Win64\G1R-Win64-Shipping.exe"
 if ((Get-Process G1R-Win64-Shipping -ErrorAction SilentlyContinue) -and -not $Add) { throw "a game is already running" }          # -Add starts another seat next to a running one (log and markers are kept)
@@ -12,6 +12,8 @@ if (Test-Path $lg) { New-Item -ItemType Directory -Force "$c\native\build\logs" 
 Remove-Item "$c\native\build\couchlink_seat*.log" -ErrorAction SilentlyContinue
 Remove-Item "$c\native\build\test_spawn.txt" -ErrorAction SilentlyContinue     # the sync tests record the heroes' start positions on their first run
 }
+# tests: the join gate (Diego must have left) is off for the test copies; real play (CouchLink, join.ps1) has no such file, so the gate is on; -Gate tests the gate
+if ($Gate) { Remove-Item "$c\native\build\gate_off.txt" -ErrorAction SilentlyContinue } else { Set-Content "$c\native\build\gate_off.txt" "tests" }
 Add-Type -AssemblyName System.Windows.Forms
 $s = [Windows.Forms.Screen]::PrimaryScreen.Bounds
 foreach ($seat in $Seats) {

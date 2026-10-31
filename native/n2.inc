@@ -732,6 +732,29 @@ static int obs_pop_w(int *slot, uint8_t **obj, uint8_t *params, int cap, int *pl
     return 1;
 }
 
+/* ---- join gate: the host lets the friend in only when the story allows it (Diego has finished his start conversation and left: StoryG1R.Diego_After_Gamestart != 0) ----
+ * The host sends only a tiny "G|<open>" beacon while the gate is closed and drops everything it receives; the guest sends "G|H" (hello) and drops everything until the host's beacon says
+ * open. build\gate_off.txt switches the gate off (tests, saves that predate the rule). The story module tells the host's core with set_coop_gate. */
+static int now_log_ok(unsigned long *last, unsigned long every) { unsigned long n = GetTickCount(); if (n - *last < every) return 0; *last = n; return 1; }
+static volatile int g_gate_open = 1;                 /* the host's own state (set by the story module) */
+static int g_gate_on = 1, g_role_host = 1, g_remote_open = -1; static unsigned long g_gate_t, g_gate_log;
+static void gate_tick(void)
+{
+    unsigned long now = GetTickCount(); if (now - g_gate_t < 1000) return; g_gate_t = now;
+    char p[MAX_PATH]; snprintf(p, sizeof p, "C:/Program Files (x86)/Steam/steamapps/common/Gothic1R-coop/native/build/gate_off.txt");
+    g_gate_on = GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES;
+    g_role_host = !(T.id[0] == 'S' && T.id[1] == '1');
+    { char rp[MAX_PATH]; snprintf(rp, sizeof rp, "C:/Program Files (x86)/Steam/steamapps/common/Gothic1R-coop/native/build/role.txt"); FILE *f = fopen(rp, "r"); if (f) { char l[40] = ""; if (fgets(l, sizeof l, f)) { if (strstr(l, "guest")) g_role_host = 0; else if (strstr(l, "host")) g_role_host = 1; } fclose(f); } }
+}
+static int gate_accepts(void) { if (!g_gate_on) return 1; return g_role_host ? g_gate_open : g_remote_open == 1; }
+static void gate_rx(const char *rx, int n)
+{
+    if (n < 3) return;
+    if (g_role_host) { if (rx[2] == 'H' && now_log_ok(&g_gate_log, 15000)) logf_("net: the friend knocked (%s)", g_gate_open ? "the gate is open" : "the gate is closed: Diego has not finished the start conversation yet"); }
+    else { int o = rx[2] == '1'; if (o != g_remote_open) { g_remote_open = o; logf_("net: the host says: %s", o ? "welcome, the gate is open" : "not ready yet, wait until the host has talked to Diego"); } else if (!o && now_log_ok(&g_gate_log, 15000)) logf_("net: still waiting for the host (talk to Diego first)"); }
+}
+
+static void set_coop_gate_w(int open) { g_gate_open = open; }
 static void set_local_blob3_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob3) len = 0; memcpy(g_lblob3, d, (size_t)len); g_lblob3_len = len; }
 static void set_local_blob2_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob2) len = 0; memcpy(g_lblob2, d, (size_t)len); g_lblob2_len = len; }
 static void set_local_blob_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob) len = 0; memcpy(g_lblob, d, (size_t)len); g_lblob_len = len; }
@@ -805,7 +828,7 @@ static void api_init(void)
     g_api.set_attach_target = set_attach_target_w;
     g_api.remote_blob = g_rblob;
     g_api.list_members = list_members_w;
-    g_api.describe_fn = describe_fn_w; g_api.observe_fn = observe_fn_w; g_api.obs_pop = obs_pop_w;
+    g_api.set_coop_gate = set_coop_gate_w; g_api.describe_fn = describe_fn_w; g_api.observe_fn = observe_fn_w; g_api.obs_pop = obs_pop_w;
     g_api.write_mem = write_mem_w;
     g_api.action = "-"; g_api.action_pkg = "-";
 }
@@ -1190,7 +1213,16 @@ static void frame_work(void)
         if (T.puppet_char == 1 && (T.frame == 60 || T.frame == 300 || T.frame == 900)) { dump_vis("hero  ", T.hero); dump_vis("puppet", T.marker); }
         double h[3]; read_hero_pos(h);
         double r[3] = {0}; safe_read(T.root + 320, r, 24);   /* RelativeRotation: pitch, yaw, roll */
+        int gate_blocked = 0;
         if (T.net_ok && T.frame % 3 == 0) {
+            gate_tick();
+            if (g_gate_on) {                                                       /* beacon: the host tells its state, the guest says hello until it is let in */
+                char gm[8]; int gl = g_role_host ? snprintf(gm, sizeof gm, "G|%d", g_gate_open ? 1 : 0) : snprintf(gm, sizeof gm, "G|H");
+                if (g_role_host || g_remote_open != 1 || T.frame % 30 == 0) sendto(T.sock, gm, gl, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
+                gate_blocked = !gate_accepts();
+            }
+        }
+        if (T.net_ok && T.frame % 3 == 0 && !gate_blocked) {
             char msg[1600], act[96]; int mm = 1;
             local_action(act, sizeof act, &mm);
             if (strcmp(act, T.sent_act) != 0) { logf_("A local action -> %s (movemode %d)", act, mm); snprintf(T.sent_act, sizeof T.sent_act, "%s", act); }
@@ -1241,6 +1273,8 @@ static void frame_work(void)
                     continue;
                 }
                 rx[n] = 0;
+                if (n >= 3 && rx[0] == 'G' && rx[1] == '|') { gate_rx(rx, n); continue; }
+                if (!gate_accepts()) continue;                                  /* the gate is closed: nothing is processed */
                 if (n > 5 && rx[0] == 'B' && rx[1] == '|') {
                     uint8_t ob[BLOB_MAX]; int ol = 0;
                     if (ring_feed(&g_ring_b, (const uint8_t *)rx, n, ob, &ol)) { memcpy(g_rblob, ob, (size_t)ol); g_rblob_len = ol; g_rblob_seq++; }

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define COREAPI_VERSION 11
+#define COREAPI_VERSION 12
 
 typedef struct CoreAPI {
     int version;
@@ -96,6 +96,9 @@ typedef struct CoreAPI {
      * obs_pop takes the oldest recorded call: slot, the object it was called on, the parameter buffer (only if the call came through ProcessEvent: had_locals) */
     int (*observe_fn)(const char *outer, const char *fn);
     int (*obs_pop)(int *slot, uint8_t **obj, uint8_t *params, int cap, int *plen, int *had_locals);
+
+    /* v12: join gate. The host module calls set_coop_gate(1) when the story lets the friend in (0 closes it); the core then sends / accepts traffic accordingly */
+    void (*set_coop_gate)(int open);
 } CoreAPI;
 
 /* exports of a module */

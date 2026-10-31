@@ -36,7 +36,7 @@ static struct {
     int hist[256]; int histlogged;
     /* world items: picked up here -> removed there (matched by the persistent id every placed actor has) */
     It it[MAXI]; int nit; Gone gone[128]; int ngone; uint8_t removed[2048][16]; int nremoved;
-    uint8_t *cls_cont; int keep_birds, n_birds, fast_scan; double hp[3]; int hp_valid;
+    uint8_t *cls_cont; int diego_off, gate_last; int keep_birds, n_birds, fast_scan; double hp[3]; int hp_valid;
     /* container loot: Server_ConsumeItem calls the game makes on a tracked chest's module (a player took items out) are replayed on the other copy */
     struct { uint32_t lid; uint8_t id[16]; uint8_t type; int32_t item, amount; unsigned sent; } lootq[64]; int nloot; uint32_t loot_next;
     uint32_t seen_lid[256]; int nseen;
@@ -104,7 +104,7 @@ static void init_story(CoreAPI *a)
     struct Blk b = { 1 << 30, 0 };
     a->list_members(S.cls_story, blk_cb, &b);
     S.blk_off = b.lo; S.blk_len = (b.hi - b.lo) & ~3; S.nw = S.blk_len / 4;
-    S.chap_off = a->find_prop_offset(S.cls_story, "Chapter");
+    S.chap_off = a->find_prop_offset(S.cls_story, "Chapter"); S.diego_off = a->find_prop_offset(S.cls_story, "Diego_After_Gamestart");
     if (S.nw + 1 > MAXW || S.nw <= 0) { a->log("S story block %d..%d does not fit", b.lo, b.hi); S.nw = 0; return; }
     a->read_mem(S.story + S.blk_off, S.cur, (size_t)S.blk_len);
     if (S.chap_off >= 0) a->read_mem(S.story + S.chap_off, &S.cur[S.nw], 4);
@@ -501,6 +501,12 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     S.off = 0; S.role = role_of(); S.keep_birds = GetFileAttributesA(BUILD "ambient_keep.txt") != INVALID_FILE_ATTRIBUTES; S.fast_scan = GetFileAttributesA(BUILD "scan_fast.txt") != INVALID_FILE_ATTRIBUTES;
     if (a->hero != S.last_hero) { S.last_hero = a->hero; S.last_hero_t = now; reset_story(); S.qsys = NULL; S.nq = 0; S.scanning = 0; S.have_contact = 0; }
     PROF(0, obs_tick(a));                                                              /* also in the main menu and right after a world loads: a cutscene can start at once */                              /* works with a single copy too */
+    if (a->hero && a->set_coop_gate && now - S.last_hero_t >= 3000) {                      /* the join gate (host): open once Diego has finished the start conversation and left (StoryG1R.Diego_After_Gamestart != 0) */
+        if (!S.story && fresh) { find_objects(a); if (S.story && !S.nw) init_story(a); }
+        int open = 0; if (S.story && S.diego_off > 0 && same_obj(a, S.story, S.story_fn)) { int32_t v = 0; a->read_mem(S.story + S.diego_off, &v, 4); open = v != 0; }
+        a->set_coop_gate(open);
+        if (open != S.gate_last) { S.gate_last = open; a->log("S gate: %s (Diego_After_Gamestart %s)", open ? "OPEN, the friend may join" : "closed, the friend has to wait", open ? "set" : "0 or not found yet"); }
+    }
     if (!a->hero || !a->have_remote || now - S.last_hero_t < 10000) return;               /* a new world has to settle first */
     if (S.story && !same_obj(a, S.story, S.story_fn)) reset_story();
     if (S.qsys && !same_obj(a, S.qsys, S.qsys_fn)) { S.qsys = NULL; S.nq = 0; }
