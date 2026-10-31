@@ -14,10 +14,9 @@ function Hero($seat) { [regex]::Match((Probe $seat "frames"), "hero=([0-9A-F]+)"
 if (-not ((PidOf 0) -and (PidOf 1))) { throw "start both copies first" }
 $skip = @{}
 function RunOne($from, $to, $label) {
-    $ptr = $null
-    foreach ($m in [regex]::Matches((Probe $from "ioscan Chest 40"), "([0-9A-F]{16}) \S+ \(")) {
-        $p = $m.Groups[1].Value; if ($skip[$p]) { continue }
-        if ((Probe $from "emptychest 0x$p dry") -match "(\d+) \+ (\d+) items before" -and ([int]$matches[1] + [int]$matches[2]) -gt 0) { $ptr = $p; break }
+    $ptr = $null; $name = ""
+    foreach ($m in [regex]::Matches((Probe $from "chestlist 80 1"), "CHEST ([0-9A-F]{16}) (\S+) items")) {          # one call: every chest that has something inside
+        if (-not $skip[$m.Groups[1].Value]) { $ptr = $m.Groups[1].Value; $name = $m.Groups[2].Value; break }
     }
     Check "$label setup: a chest with something inside is loaded" ([bool]$ptr) $ptr
     if (-not $ptr) { return }
@@ -25,7 +24,14 @@ function RunOne($from, $to, $label) {
     $t = Probe $from "tpto 0x$(Hero $from) 0x$ptr 200 0 80"; $pos = [regex]::Match($t, "target at (-?\d+) (-?\d+) (-?\d+)")
     if (-not $pos.Success) { Check "$label setup: hero next to the chest" $false; return }
     Probe $to "tp hero $($pos.Groups[1].Value) $([int]$pos.Groups[2].Value + 150) $([int]$pos.Groups[3].Value + 80)" | Out-Null
-    Start-Sleep 12
+    $mark0 = (Get-Content $log | Measure-Object -Line).Lines
+    $tracked = $false                                                          # wait until BOTH copies track this chest (loaded and found by the item scan)
+    for ($w = 0; $w -lt 40 -and -not $tracked; $w++) {
+        Start-Sleep 1; $n0 = Get-Content $log | Select-Object -Skip $mark0
+        $tracked = (@($n0 | Where-Object { $_ -match "^\[$(PidOf $from)\] S chest tracked: $([regex]::Escape($name))," }).Count -ge 1) -and (@($n0 | Where-Object { $_ -match "^\[$(PidOf $to)\] S chest tracked: $([regex]::Escape($name))," }).Count -ge 1)
+    }
+    Check "$label the chest is tracked in both copies" $tracked $name
+    if (-not $tracked) { return }
     $mark = (Get-Content $log | Measure-Object -Line).Lines
     $r = Probe $from "emptychest 0x$ptr"
     Start-Sleep 8

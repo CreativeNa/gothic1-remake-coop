@@ -514,6 +514,24 @@ static void run_command(char *line)
         }
         P("scan done"); return;
     }
+    if (!strcmp(c, "chestlist")) {                                       /* chestlist [max] [minItems]: chest actors (class name contains Chest, with a container module) in ONE call: pointer, name, the two list lengths, position */
+        int max = nt > 1 ? atoi(tok[1]) : 60, minit = nt > 2 ? atoi(tok[2]) : 0, shown = 0, n = A->num_objects(); char nm[160], cn[96];
+        uint8_t *dc = A->find_object(NULL, "Default__DataModule_Container", NULL); uint8_t *kc = dc ? A->obj_class(dc) : NULL; if (!kc) { P("no container class"); return; }
+        int oi = A->find_prop_offset(kc, "m_Inventory");
+        for (int i = 0; i < n && shown < max; i++) {
+            uint8_t *o = A->object_at(i); if (!o) continue; uint8_t *k = A->obj_class(o);
+            int oc = A->find_prop_offset(k, "m_DataModuleComponent"); if (oc < 0 || A->find_prop_offset(k, "m_PersistentId") < 0) continue;
+            A->obj_name(k, cn, sizeof cn); { char l[96]; strncpy(l, cn, sizeof l - 1); l[95] = 0; for (char *q = l; *q; q++) if (*q >= 'A' && *q <= 'Z') *q += 32; if (!strstr(l, "chest")) continue; }
+            A->obj_name(o, nm, sizeof nm); if (!strncmp(nm, "Default__", 9) || A->read_bool(o, "bActorIsBeingDestroyed") == 1) continue;
+            uint8_t *comp = NULL; A->read_mem(o + oc, &comp, 8); int oa = comp ? A->find_prop_offset(A->obj_class(comp), "m_DataModules") : -1; uint8_t *arr = NULL; int num = 0;
+            if (oa >= 0) { A->read_mem(comp + oa, &arr, 8); A->read_mem(comp + oa + 8, &num, 4); }
+            for (int e = 0; arr && e < num && e < 32; e++) { uint8_t *m = NULL; A->read_mem(arr + (size_t)e * 8, &m, 8); if (!m || A->obj_class(m) != kc) continue;
+                int n0 = 0, n1 = 0; A->read_mem(m + oi + 8, &n0, 4); A->read_mem(m + oi + 24, &n1, 4); if (n0 + n1 < minit) break;
+                double lp[3] = {0,0,0}; A->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, lp, 24);
+                P("CHEST %p %s items %d + %d pos %.0f %.0f %.0f", o, nm, n0, n1, lp[0], lp[1], lp[2]); shown++; break; }
+        }
+        P("%d chests listed", shown); return;
+    }
     if (!strcmp(c, "heroinfo")) {                                        /* heroinfo: the hero's position (to put it back after a test) */
         double l[3] = { 0 }; if (!A->hero || !A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, l, 24)) { P("HEROINFO none"); return; }
         P("HEROINFO pos %.0f %.0f %.0f", l[0], l[1], l[2]); return;
