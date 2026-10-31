@@ -57,3 +57,10 @@ Last updated: 2026-10-30
 - Story/quests, by eye in the game: a journal entry and a notification appear on the guest when the host starts a quest; both heroes get the reward (and only once); a dialogue in progress on one copy.
 - Fuzz test with the NPC module off, to see whether the fmod crash (+0x5be3977) is the game's own.
 - Real two-PC test over IP, arrows in flight, friend archive.
+
+## World items (2026-10-31)
+- The story module also syncs pickups of items lying in the world: an item that gets destroyed within 450-2500 units of its hero (one at a time, not right after a teleport) is destroyed in the other copy too; if the other copy has not loaded it yet it is removed when it appears.
+  Items are matched by their persistent id, or (for items the level spawns at runtime, which have none) by class + position rounded to 25 units.
+- The core's `obj_alive(ptr, name)` mis-reports objects that differ only by the number suffix of their name (the cache is per FName index); the module checks identity on the raw FName instead. Other modules still use the old call.
+- Test: `tools	ests	est_items.ps1` (8 checks, both directions).
+- NOT done: chests and bodies (contents are in the actor's DataModuleComponent, not examined), items dropped by a player, trading, each hero keeps its own inventory. Not tried: a real pickup by interaction (the test destroys the actor, which is what a pickup should do; not verified).

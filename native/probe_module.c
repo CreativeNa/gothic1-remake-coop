@@ -383,6 +383,33 @@ static void run_command(char *line)
         int ok = A->call_fn(asc[0], "AbilitySystemComponent", "BP_ApplyGameplayEffectToTarget", 4, nn, vv, ss, ret, 8);
         P("gedamage ran: %d, handle %02x%02x%02x%02x", ok, ret[0], ret[1], ret[2], ret[3]); return;
     }
+    if (!strcmp(c, "ioscan")) {                                          /* ioscan [classSub] [max]: live actors that have a persistent id (items lying around, chests, doors ...): count per class, and the first few with id and position */
+        const char *sub = nt > 1 && strcmp(tok[1], "*") ? tok[1] : NULL; int max = nt > 2 ? atoi(tok[2]) : 12, shown = 0;
+        struct { uint8_t *cls; int n; char name[80]; } cl[200]; int ncl = 0; static uint8_t *no[256]; static int nno;       /* classes known to have no id */
+        int total = 0, n = A->num_objects(); char nm[160];
+        for (int i = 0; i < n; i++) {
+            uint8_t *o = A->object_at(i); if (!o) continue; uint8_t *k = A->obj_class(o); int skip = 0;
+            for (int j = 0; j < nno; j++) if (no[j] == k) { skip = 1; break; }
+            if (skip) continue;
+            int oid = A->find_prop_offset(k, "m_PersistentId");
+            if (oid < 0) { if (nno < 256) no[nno++] = k; continue; }
+            { uint32_t fl = 0; A->read_mem(o + 8, &fl, 4); if (fl & 0x8000) continue; }          /* destroyed, waiting for the garbage collector */
+            A->obj_name(o, nm, sizeof nm); if (!strncmp(nm, "Default__", 9)) continue;
+            char cn[96]; A->obj_name(k, cn, sizeof cn); if (sub && !ci_has(cn, sub)) continue;
+            total++;
+            int f = -1; for (int j = 0; j < ncl; j++) if (cl[j].cls == k) { f = j; break; }
+            if (f < 0 && ncl < 200) { f = ncl++; cl[f].cls = k; cl[f].n = 0; snprintf(cl[f].name, sizeof cl[f].name, "%s", cn); }
+            if (f >= 0) cl[f].n++;
+            if (shown < max) {
+                shown++; uint8_t id[16] = {0}; A->read_mem(o + oid, id, 16);
+                double lp[3] = {0,0,0}; A->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, lp, 24);
+                P("  %p %s (%s) pos %.0f %.0f %.0f id %02x%02x%02x%02x-%02x%02x%02x%02x-%02x%02x%02x%02x-%02x%02x%02x%02x", o, nm, cn, lp[0], lp[1], lp[2], id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7], id[8], id[9], id[10], id[11], id[12], id[13], id[14], id[15]);
+            }
+        }
+        for (int j = 0; j < ncl; j++) if (cl[j].n >= 2) P("  class %s x%d", cl[j].name, cl[j].n);
+        P("%d actors with a persistent id", total);
+        return;
+    }
     if (!strcmp(c, "heroinfo")) {                                        /* heroinfo: the hero's position (to put it back after a test) */
         double l[3] = { 0 }; if (!A->hero || !A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, l, 24)) { P("HEROINFO none"); return; }
         P("HEROINFO pos %.0f %.0f %.0f", l[0], l[1], l[2]); return;

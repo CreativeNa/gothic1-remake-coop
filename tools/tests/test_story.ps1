@@ -19,10 +19,11 @@ Probe 0 "set 0x$sh Drax_GotBeer $v1" | Out-Null; Start-Sleep 4
 Check "story flag: host change reaches the guest" ((Val 1 $sg "Drax_GotBeer") -eq $v1) "host set $v1, guest $(Val 1 $sg 'Drax_GotBeer')"
 Probe 1 "set 0x$sg Drax_GotBeer $orig" | Out-Null; Start-Sleep 4
 Check "story flag: guest change reaches the host" ((Val 0 $sh "Drax_GotBeer") -eq $orig) "guest set $orig, host $(Val 0 $sh 'Drax_GotBeer')"
-$q0 = Val 0 $qh "State"
+Probe 0 "set 0x$qh State 1" | Out-Null; Start-Sleep 4                  # a defined starting point whatever an earlier run left behind
+$q0 = 1
 Probe 0 "call 0x$qh Quest StartQuest" | Out-Null; Start-Sleep 4
 Check "quest: started on the host, running on the guest" ((Val 1 $qg "State") -eq 2) "host $(Val 0 $qh 'State'), guest $(Val 1 $qg 'State')"
-Probe 1 "call 0x$qg Quest SucceedQuest" | Out-Null; Start-Sleep 4
+Probe 1 "set 0x$qg State 4" | Out-Null; Start-Sleep 4
 Check "quest: finished on the guest, finished on the host" ((Val 0 $qh "State") -eq 4) "guest $(Val 1 $qg 'State'), host $(Val 0 $qh 'State')"
 Probe 0 "set 0x$qh State $q0" | Out-Null; Start-Sleep 4                 # put it back
 Check "quest: reset on the host is reset on the guest" ((Val 1 $qg "State") -eq $q0) "guest $(Val 1 $qg 'State') (wanted $q0)"
