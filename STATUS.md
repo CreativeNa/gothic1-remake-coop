@@ -27,8 +27,10 @@ Last updated: 2026-10-30
 
 ## Shared world (2026-10-31)
 
-- Verified by the automated test (`tools\test_ko.ps1`, pictures in `docs\img\ko_*.png`): the host hero fights an NPC with real game input actions, the NPC lies knocked out, and the guest sees the same NPC lying in the same place (bone-pose copy of the closest NPCs, no clip guessing).
-- Not done: health / death shared, the guest's own hits on NPCs, standing-up transitions checked, animals use the same path but are untested, arrows in flight.
+- Host (seat 0) runs the NPC AI and sends id, position, yaw, speed and the active clip of the NPCs near either player (second blob channel, `npc_module.c`). The guest places the mirrored NPCs, plays the host's clip on them (not the additive `FA_*` clips) and disables their collision, so the host alone decides what happens to an NPC.
+- Defeated NPCs (`GothicCharacter::IsDefeated`) are bone-driven on the guest: a `PoseableMeshComponent` with the NPC's mesh asset, the original mesh hidden with tick / physics / collision off, items (sword, bow, quiver, pouch) re-attached to it. Bones are applied exactly in one pass (compensating the parent cache of `SetBoneTransformByName`); bones that only exist in the close-up level of detail (face, ribs, scapula ...) stay in the reference pose. Bone-driving sitting or standing NPCs was dropped: their meshes were pulled into spikes once a player came near.
+- Verified with the automated test (`tools\test_ko.ps1`, pictures in `docs\img\`): the host hero knocks Ratford out with real game input actions and the guest shows him lying in the same place with his bow and quiver on him; sitting NPCs (Ratford, Drax at the fire) match; repeated quick loads with an NPC down no longer crash (with the UE4SS loader of the test copy disabled: `dwmapi.dll.off`).
+- Not done / not verified: the transition frames of falling and getting up (the camera of the test was unreliable), the sockets of the NPC's weapon (the host's mace is in the hand, the guest's stays holstered), health / death shared, the guest's own hits on NPCs (they are ignored, the host decides), arrows in flight.
 
 ## Not started
 

@@ -1,6 +1,6 @@
 # Automated knock-out test (both copies must be running, see harness_start.ps1): the host hero fights Ratford with real game input actions until the
 # game logs "Defeated", then both windows are photographed several times and joined into docs\img\ko_<n>.png (host | guest).
-param([string]$Npc = "Ratford", [int]$MaxAttacks = 14, [int]$GuestDist = 330, [int]$GuestPitch = -35, [int]$Attacker = 0)   # -Attacker 1: the GUEST window fights, the host window watches   # the guest camera: distance behind the host hero and pitch (use -8 and 150 for a low close-up)
+param([string]$Npc = "Ratford", [int]$MaxAttacks = 14, [int]$GuestDist = 330, [int]$GuestPitch = -35, [int]$Attacker = 0, [int]$Frames = 3, [int]$FrameGap = 1500)   # -Attacker 1: the GUEST window fights, the host window watches   # the guest camera: distance behind the host hero and pitch (use -8 and 150 for a low close-up)
 $c = Split-Path $PSScriptRoot -Parent
 $dev = Join-Path $c "tools\dev.ps1"; $log = Join-Path $c "native\build\coopdll.log"; $tmp = Join-Path $env:TEMP "g1shots"
 function PidOf($seat) { (Get-CimInstance Win32_Process -Filter "Name='G1R-Win64-Shipping.exe'" | Where-Object { $_.CommandLine -match "-CoopSeat=$seat(\s|$)" } | Select-Object -First 1).ProcessId }
@@ -24,12 +24,12 @@ for ($i = 0; $i -lt $MaxAttacks -and -not $down; $i++) {
 }
 "knocked out: $down after $($i) attacks"
 New-Item -ItemType Directory -Force (Join-Path $c "docs\img") | Out-Null
-foreach ($k in 1..3) {
+foreach ($k in 1..$Frames) {
     foreach ($seat in 0, 1) { & (Join-Path $c "tools\winshot.ps1") -Seat $seat -Out "$tmp\ko${k}_seat$seat.png" | Out-Null }
-    Start-Sleep -Milliseconds 1500
+    Start-Sleep -Milliseconds $FrameGap
 }
 Add-Type -AssemblyName System.Drawing
-foreach ($k in 1..3) {
+foreach ($k in 1..$Frames) {
     $a = [Drawing.Image]::FromFile("$tmp\ko${k}_seat0.png"); $b = [Drawing.Image]::FromFile("$tmp\ko${k}_seat1.png")
     $bmp = New-Object Drawing.Bitmap ($a.Width + $b.Width + 8), ([Math]::Max($a.Height, $b.Height) + 22); $g = [Drawing.Graphics]::FromImage($bmp); $g.Clear([Drawing.Color]::FromArgb(24, 24, 24))
     $g.DrawImage($a, 0, 22); $g.DrawImage($b, $a.Width + 8, 22)

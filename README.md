@@ -96,6 +96,18 @@ Copy `tools\couchlink\perf_cmds.example.txt` to `native\build\perf_cmds.txt`: it
 
 The `probe` module (`native/probe_module.c`) reads `native\build\probe_cmd.txt` and answers in `probe_out_<pid>.txt`. Rule of thumb: put new game logic into modules, not into the core, so a change never costs a restart.
 
+## Automated test harness (no human needed)
+
+| Tool | What it does |
+|---|---|
+| `tools\harness_start.ps1` | starts both copies (seat 0 = host, seat 1 = guest) without CouchLink; autoload takes them into the newest save |
+| `tools\winshot.ps1 -Seat N` | screenshot of one game window, even when it is covered |
+| `tools\harness.ps1 near / hp / act / fight / shot / stop` | moves an NPC next to the heroes and aims the cameras, sets NPC health, presses game input actions, takes both screenshots |
+| `tools\test_ko.ps1` | the host hero fights an NPC with real input actions until it is down, both windows are photographed into `docs\img\ko_*.png` (`-Attacker 1` lets the guest fight) |
+| probe commands | `inject <InputAction>`, `tpto`, `lookat`, `npchp`, `npcs`, `attached`, `@<seat> <command>` (run in one copy only) |
+
+The game reads input only while its window has the focus; `tools\realclick.ps1 -Seat N -Click 0` brings a window to the front.
+
 ## Repository layout
 
 | Path | What |
