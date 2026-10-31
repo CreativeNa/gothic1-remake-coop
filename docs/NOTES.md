@@ -53,3 +53,7 @@ Debug switches (build\): pose_off.txt (back to clips), pose_mode.txt (0..3), pos
 - Instance names are stable and spawn-point based (`Character_NC_ORG_Ratford_818-WP_ExF_RATFORD_SPAWN`, `Character_ScavengerYoung-WP_ExF_HUT_SCAVENGER_SPAWN_01-1`), so two copies that loaded the same save can match an NPC by name.
 - An NPC is driven by a `GothicAIController` (`Pawn.Controller`). `Controller.UnPossess()` leaves the pawn standing with no AI; `Actor.K2_SetActorLocation` then moves it and it stays there. So the guest can freeze the AI of mirrored NPCs and place them from the host's data.
 - Plan (host-authoritative): seat 0 / the host runs the AI and sends id, position, rotation, speed, health of NPCs near either player over a second blob channel; the guest unpossesses those NPCs and applies the data (later the pose blob, death, and the guest's hits sent to the host).
+
+## Known game crash: fmod, G1R-Win64-Shipping.exe+0x5be3977 (2026-10-31)
+Access violation reading 0x200, stack through fmodstudio.dll, "our code at that moment: call=none". Seen by the user and twice in the ownership fuzz test (rapid hero teleports around the camp).
+Not yet checked whether it also happens with the NPC module off (todo: fuzz with native/build/npc_off.txt). Treat as a game bug until shown otherwise.
