@@ -41,7 +41,7 @@ static struct {
     struct { uint32_t lid; uint8_t id[16]; uint8_t type; int32_t item, amount; unsigned sent; } lootq[64]; int nloot; uint32_t loot_next;
     uint32_t seen_lid[256]; int nseen;
     /* cutscenes: ForceStartCinematic / skip / stop calls on the cinematic manager are replayed on the other copy */
-    struct { uint32_t lid; uint8_t type; char name[48]; unsigned sent; } cineq[8]; int ncine; uint8_t *cine_mgr; uint32_t cine_fn[2];
+    struct { uint32_t lid; uint8_t type; char name[48]; unsigned sent; } cineq[8]; int ncine; uint8_t *cine_mgr; uint32_t cine_fn[2]; unsigned long t_cine_find;
     struct { uint8_t type; char name[48]; unsigned long t; } csupp[8]; int ncsupp; int n_cine_sent, n_cine_applied;
     struct { uint8_t id[16]; uint8_t type; int32_t item, amount; unsigned long t; } supp[16]; int nsupp;
     struct { uint8_t id[16]; uint8_t type; int32_t item, amount; } lootpend[32]; int nlootpend; int n_loot_sent, n_loot_applied; int n_chest_sent, n_chest_applied; uint8_t *cls_ok[300]; uint8_t cls_has[300]; int ncls; int it_off_cache; int isc_pos; int n_pick_sent, n_pick_applied;
@@ -321,12 +321,15 @@ static void loot_apply(CoreAPI *a, It *t, uint8_t type, int32_t item, int32_t am
 }
 
 /* replay of a cutscene call: the same ForceStartCinematic(Class) / skip / stop the game scripts make, on this copy's cinematic manager */
+static void cine_find(CoreAPI *a)                                                              /* this copy's cinematic manager (the instance of the script subclass); a full object scan, so rarely */
+{
+    if (S.cine_mgr && a->obj_alive(S.cine_mgr, NULL)) return;
+    S.cine_mgr = NULL; uint8_t *d = a->find_object(NULL, "Default__GothicCinematicManagerSubsystemScript", NULL); uint8_t *k = d ? a->obj_class(d) : NULL; int n = a->num_objects();
+    for (int i = 0; k && i < n; i++) { uint8_t *o = a->object_at(i); if (o && a->obj_class(o) == k && o != d) { S.cine_mgr = o; break; } }
+}
 static void cine_apply(CoreAPI *a, uint8_t type, const char *name)
 {
-    if (!S.cine_mgr || !a->obj_alive(S.cine_mgr, NULL)) {                                      /* find this copy's manager (once; the instance of the script subclass) */
-        S.cine_mgr = NULL; uint8_t *d = a->find_object(NULL, "Default__GothicCinematicManagerSubsystemScript", NULL); uint8_t *k = d ? a->obj_class(d) : NULL; int n = a->num_objects();
-        for (int i = 0; k && i < n; i++) { uint8_t *o = a->object_at(i); if (o && a->obj_class(o) == k && o != d) { S.cine_mgr = o; break; } }
-    }
+    cine_find(a);
     if (!S.cine_mgr) { a->log("S cine: no cinematic manager here, %s not replayed", name); return; }
     if (S.ncsupp < 8) { S.csupp[S.ncsupp].type = type; snprintf(S.csupp[S.ncsupp].name, 48, "%s", name); S.csupp[S.ncsupp].t = GetTickCount(); S.ncsupp++; }
     int ok = 0;
@@ -334,20 +337,29 @@ static void cine_apply(CoreAPI *a, uint8_t type, const char *name)
         char dn[100]; snprintf(dn, sizeof dn, "Default__%s", name); uint8_t *d = a->find_object(NULL, dn, NULL); uint8_t *cl = d ? a->obj_class(d) : NULL;
         if (!cl) { a->log("S cine: class %s not found here", name); return; }
         const char *nn[1] = { "LevelSequence" }; const void *vv[1] = { &cl }; int sz[1] = { 8 };
-        ok = a->call_fn(S.cine_mgr, "GothicCinematicManagerSubsystem", "ForceStartCinematic", 1, nn, vv, sz, NULL, 0);
-    } else if (type == 1) { int32_t pid = 0; const char *nn[1] = { "PlayerId" }; const void *vv[1] = { &pid }; int sz[1] = { 4 }; ok = a->call_fn(S.cine_mgr, "GothicCinematicManagerSubsystem", "Server_OnSkipCutsceneRequest", 1, nn, vv, sz, NULL, 0); }
-    else ok = a->call_fn(S.cine_mgr, "GothicCinematicManagerSubsystem", "StopCinematicServer", 0, NULL, NULL, NULL, NULL, 0);
+        nn[0] = "CinematicClass"; ok = a->call_fn(S.cine_mgr, "GothicCinematicManagerSubsystem", "Server_OnForceStartCinematic", 1, nn, vv, sz, NULL, 0);
+    } else if (type == 1) { int32_t pid = 0; const char *nn[1] = { "PlayerId" }; const void *vv[1] = { &pid }; int sz[1] = { 4 }; { uint8_t st = 0, *cin = NULL; a->read_mem(S.cine_mgr + 97, &st, 1); a->read_mem(S.cine_mgr + 112, &cin, 8); if (!st || !cin) { a->log("S cine: skip not replayed here (no cutscene is playing)"); return; } } ok = a->call_fn(S.cine_mgr, "GothicCinematicManagerSubsystem", "Server_OnSkipCutsceneRequest", 1, nn, vv, sz, NULL, 0); }
+    else {                                                                                      /* StopCinematicServer faults inside the game (null read at +0xf0) when no cinematic object exists: only call it while one really plays */
+        uint8_t st = 0, *cin = NULL; a->read_mem(S.cine_mgr + 97, &st, 1); a->read_mem(S.cine_mgr + 112, &cin, 8);
+        if (!st || !cin) { a->log("S cine: stop not replayed here (no cutscene is playing)"); return; }
+        ok = a->call_fn(S.cine_mgr, "GothicCinematicManagerSubsystem", "StopCinematicServer", 0, NULL, NULL, NULL, NULL, 0);
+    }
     S.n_cine_applied++; a->log("S cine: %s %s replayed here (%s)", type == 0 ? "start" : type == 1 ? "skip" : "stop", name, ok ? "ok" : "failed");
 }
 
 /* ---- loot observer: which container functions does the game call when a player takes items? (logged for now; see docs/CHANGELOG.md) ---- */
 static const char *OBS_FNS[] = { "Server_MoveItemTo", "Server_MoveItemFromActorToOtherActor", "Server_AddAllItemsFromContainer", "Server_GetItemsFromContainerInv", "Server_PickWorldItem", "Server_ConsumeItem", "Server_AddNewItem" };
-static int obs_ready, obs_slot[8], obs_cine[4];
+static int obs_ready, obs_slot[8] = { -1, -1, -1, -1, -1, -1, -1, -1 }, obs_cine[4] = { -1, -1, -1, -1 };
 static const char *OBS_CINE[] = { "ForceStartCinematic", "Server_OnForceStartCinematic", "Server_OnSkipCutsceneRequest", "StopCinematicServer" };
 static void obs_tick(CoreAPI *a)
 {
     if (!a->observe_fn) return;
-    if (!obs_ready) { obs_ready = 1; for (int i = 0; i < 7; i++) obs_slot[i] = a->observe_fn("DataModule_Container", OBS_FNS[i]); for (int i = 0; i < 4; i++) obs_cine[i] = a->observe_fn("GothicCinematicManagerSubsystem", OBS_CINE[i]); }
+    if (!obs_ready) {                                                                      /* retried until every function is found (they exist once the classes are loaded) */
+        static int tries; int missing = 0;
+        for (int i = 0; i < 7; i++) { if (obs_slot[i] <= 0 && !(i == 0 && obs_slot[0] == 0)) obs_slot[i] = a->observe_fn("DataModule_Container", OBS_FNS[i]); if (obs_slot[i] < 0) missing++; }
+        for (int i = 0; i < 4; i++) { if (obs_cine[i] <= 0 && !(i == 0 && obs_cine[0] == 0)) obs_cine[i] = a->observe_fn("GothicCinematicManagerSubsystem", OBS_CINE[i]); if (obs_cine[i] < 0) missing++; }
+        if (!missing || ++tries > 30) obs_ready = 1;
+    }
     int slot, plen, hl; uint8_t *obj; uint8_t pb[192];
     while (a->obs_pop(&slot, &obj, pb, sizeof pb, &plen, &hl)) {
         { int ci = -1; for (int i = 0; i < 4; i++) if (obs_cine[i] == slot && slot >= 0) ci = i;
@@ -356,7 +368,7 @@ static void obs_tick(CoreAPI *a)
               if (type == 0 && hl && plen >= 8) { uint8_t *cl; memcpy(&cl, pb, 8); if (cl) a->obj_name(cl, cname, sizeof cname); }
               a->log("S cine: %s %s (%s)", OBS_CINE[ci], cname, hl ? "params seen" : "bytecode call, no params");
               if (obj) { S.cine_mgr = obj; a->read_mem(obj + 0x18, S.cine_fn, 8); }
-              if (ci == 1 && type == 0) continue;                                                   /* Server_OnForceStartCinematic is the inner step of ForceStartCinematic: only the outer one is sent */
+              if (ci == 0) continue;                                                                /* ForceStartCinematic (script call) ends in Server_OnForceStartCinematic, which the game's own start path (the intro) calls directly: the inner call is the one that is sent */
               int mine = 0; unsigned long nowt = GetTickCount();
               for (int k = 0; k < S.ncsupp; k++) { if (nowt - S.csupp[k].t > 8000) { S.csupp[k] = S.csupp[--S.ncsupp]; k--; continue; } if (S.csupp[k].type == type && !strcmp(S.csupp[k].name, cname)) { mine = 1; S.csupp[k] = S.csupp[--S.ncsupp]; break; } }
               if (!mine && !(type == 0 && !cname[0]) && S.ncine < 8) { S.cineq[S.ncine].lid = ++S.loot_next; S.cineq[S.ncine].type = type; snprintf(S.cineq[S.ncine].name, 48, "%s", cname); S.cineq[S.ncine].sent = 0; S.ncine++; S.n_cine_sent++; }
@@ -480,7 +492,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (GetFileAttributesA(BUILD "story_off.txt") != INVALID_FILE_ATTRIBUTES) { S.off = 1; return; }
     S.off = 0; S.role = role_of(); S.keep_birds = GetFileAttributesA(BUILD "ambient_keep.txt") != INVALID_FILE_ATTRIBUTES; S.fast_scan = GetFileAttributesA(BUILD "scan_fast.txt") != INVALID_FILE_ATTRIBUTES;
     if (a->hero != S.last_hero) { S.last_hero = a->hero; S.last_hero_t = now; reset_story(); S.qsys = NULL; S.nq = 0; S.scanning = 0; S.have_contact = 0; }
-    if (a->hero && now - S.last_hero_t >= 10000) PROF(0, obs_tick(a));                              /* works with a single copy too */
+    PROF(0, obs_tick(a));                                                              /* also in the main menu and right after a world loads: a cutscene can start at once */                              /* works with a single copy too */
     if (!a->hero || !a->have_remote || now - S.last_hero_t < 10000) return;               /* a new world has to settle first */
     if (S.story && !same_obj(a, S.story, S.story_fn)) reset_story();
     if (S.qsys && !same_obj(a, S.qsys, S.qsys_fn)) { S.qsys = NULL; S.nq = 0; }
@@ -496,6 +508,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
             apply_remote(a, a->remote_blob3, a->remote_blob3_len);
         }
     }
+    if (fresh && a->hero && (!S.cine_mgr || !a->obj_alive(S.cine_mgr, NULL)) && now - S.t_cine_find > 20000) { S.t_cine_find = now; cine_find(a); }
     if (S.cine_mgr && fresh) {                                                         /* a cutscene is running here (manager state != 0): the npc module stops mirroring while build\cine_active.txt exists */
         static int was; uint8_t st = 0;
         if (a->obj_alive(S.cine_mgr, NULL) && a->read_mem(S.cine_mgr + 97, &st, 1)) {

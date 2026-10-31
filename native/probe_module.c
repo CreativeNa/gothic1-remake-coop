@@ -839,6 +839,7 @@ static void autoload_tick(void)
 {
     static unsigned long t; unsigned long now = GetTickCount();
     if (now - t < 1000) return; t = now;
+    { char sk[MAX_PATH]; snprintf(sk, sizeof sk, "%s\\autoload_skip_%d.txt", g_dir, al_seat()); if (GetFileAttributesA(sk) != INVALID_FILE_ATTRIBUTES) return; }          /* this seat stays in the main menu (e.g. to start a new game by hand) */
     char path[MAX_PATH]; snprintf(path, sizeof path, "%s\\autoload.txt", g_dir);
     FILE *f = fopen(path, "r"); if (!f) return;
     int gap = 60; double wait = 2; char line[100];                                 /* gap: how long a later seat waits for the previous one at most */

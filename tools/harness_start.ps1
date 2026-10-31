@@ -1,15 +1,17 @@
 # Test harness: starts BOTH coop copies without CouchLink (seat 0 = host, seat 1 = guest), side by side on the primary monitor,
 # and the per-seat helper that injects the newest coopdll. Autoload takes them into the newest save.
 # Afterwards use tools\harness.ps1 (wait / shot / probe) to drive and to look at the game without a human.
-param([int]$W = 800, [int]$H = 450, [int[]]$Seats = @(0, 1), [switch]$NoWatchdog, [switch]$Lite)   # watchdog.ps1 keeps the PC usable (priority, RAM / CPU limits). Do NOT start the game with -nosound: fmodstudio.dll then crashes (null read) a few seconds after the start         # -Seats 0 starts only the host copy (half the memory, enough for probing the game)
+param([int]$W = 800, [int]$H = 450, [int[]]$Seats = @(0, 1), [switch]$NoWatchdog, [switch]$Lite, [switch]$Add)   # watchdog.ps1 keeps the PC usable (priority, RAM / CPU limits). Do NOT start the game with -nosound: fmodstudio.dll then crashes (null read) a few seconds after the start         # -Seats 0 starts only the host copy (half the memory, enough for probing the game)
 $c = Split-Path $PSScriptRoot -Parent
 $exe = "$c\game-test\G1R\Binaries\Win64\G1R-Win64-Shipping.exe"
-if (Get-Process G1R-Win64-Shipping -ErrorAction SilentlyContinue) { throw "a game is already running" }
+if ((Get-Process G1R-Win64-Shipping -ErrorAction SilentlyContinue) -and -not $Add) { throw "a game is already running" }          # -Add starts another seat next to a running one (log and markers are kept)
+if (-not $Add) {                                                                 # a fresh run: old markers, log and start positions are cleaned up (with -Add the running copy keeps its files)
 Remove-Item "$c\native\build\autoload_done_*.txt", "$c\native\build\cfg_*.txt" -ErrorAction SilentlyContinue
 $lg = "$c\native\build\coopdll.log"                       # one log per run: the old one is archived, so logq and the test suite only ever see this run
 if (Test-Path $lg) { New-Item -ItemType Directory -Force "$c\native\build\logs" | Out-Null; Move-Item $lg ("$c\native\build\logs\coopdll_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date)) -Force -ErrorAction SilentlyContinue }
 Remove-Item "$c\native\build\couchlink_seat*.log" -ErrorAction SilentlyContinue
 Remove-Item "$c\native\build\test_spawn.txt" -ErrorAction SilentlyContinue     # the sync tests record the heroes' start positions on their first run
+}
 Add-Type -AssemblyName System.Windows.Forms
 $s = [Windows.Forms.Screen]::PrimaryScreen.Bounds
 foreach ($seat in $Seats) {
