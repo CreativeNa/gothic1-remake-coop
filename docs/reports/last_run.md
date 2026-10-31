@@ -1,11 +1,11 @@
-﻿# Automated run 2026-10-31 12:31
+﻿# Automated run 2026-10-31 12:36
 
-17 / 17 checks passed.
+20 / 20 checks passed.
 
 | Result | Check | Detail |
 |---|---|---|
-| PASS | boot: both copies reach the world and see each other | after 46 s |
-| PASS | boot: two game processes | host 21020, guest 26544 |
+| PASS | boot: both copies reach the world and see each other | after 47 s |
+| PASS | boot: two game processes | host 21060, guest 7448 |
 | PASS | npc sync: every NPC of the host is at the same place in the guest | NPCs compared: 12, mismatching: 0 |
 | PASS | knock-out: NPC Ratford found in the host |  |
 | PASS | knock-out: the host reports the NPC defeated | after 1 attacks |
@@ -17,8 +17,11 @@
 | PASS | ownership: the NPC is at the same place in both copies | NPCs compared: 1, mismatching: 0 |
 | PASS | health: the mirror shows the owner's health 77 | mirror shows '77' |
 | PASS | health: the mirror shows the owner's health 0 | mirror shows '0' |
-| PASS | fps: seat 0 median of the last samples >= 15 | 55,0 fps |
-| PASS | fps: seat 1 median of the last samples >= 15 | 56,9 fps |
+| PASS | quick load #1: both copies survive |  |
+| PASS | quick load #2: both copies survive |  |
+| PASS | quick load: both copies see each other again |  |
+| PASS | fps: seat 0 median of the last samples >= 15 | 55,4 fps |
+| PASS | fps: seat 1 median of the last samples >= 15 | 54,0 fps |
 | PASS | stability: no access violation or exception inside our code (this run) |  |
 | PASS | stability: no new crash dump |  |
 
