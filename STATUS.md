@@ -74,3 +74,6 @@ Last updated: 2026-10-31
 - Test: `tools\tests\test_chests.ps1` passed 6/6 right after a restart. Run back to back with the story and item tests (heroes left far from the start by the previous test) it fails: the tests need a clean restart or a "heroes back to the start" step. Not fixed.
 - Ambient birds (`Pidgeon_bp`, `Crow_bp`, `AmbientLifeWarningFlock`) are destroyed by the story module (`native/build/ambient_keep.txt` keeps them): three crashes at exe+0x5be3977 had their audio emitters in the stack. Whether this removes the crash is not verified.
 - The PC froze during the last long test run (two game copies, ~32 GB RAM); the run's result is unknown.
+
+### Not verified in the real game (2026-10-31)
+Everything added in the last stretch has only been checked by automated scripts and numbers with two copies on one PC, **not by a person playing**: NPC animation (montage) sync, chest take replay, world item pickup sync, chest emptied sync, story and quest sync, the memory-leak fix, and the new tooling. Real play, including over a network between two PCs, is still untested.

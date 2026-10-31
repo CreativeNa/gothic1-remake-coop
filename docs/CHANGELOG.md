@@ -255,3 +255,5 @@ Last results with a clean start of both (lite) copies: story 6/6, chests 8/8, it
 - chests were looked for in new log lines only, but an already tracked chest is not logged again.
 **The sync tests change the world (empty chests, take items): run `tools\tests\run_sync.ps1 -Start` (fresh start) for a trustworthy result; repeated runs on the same games drift.**
 Not verified: the NPC montage sync by eye; a chest take made by hand through the UI after the leak fix; behaviour with real players over a network.
+
+**Note:** the NPC animation sync, the loot / chest / item / story sync and the leak fix were verified only by scripts and numbers, not in the real game by a person playing. They need live testing.
