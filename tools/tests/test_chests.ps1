@@ -14,9 +14,12 @@ function Hero($seat) { [regex]::Match((Probe $seat "frames"), "hero=([0-9A-F]+)"
 if (-not ((PidOf 0) -and (PidOf 1))) { throw "start both copies first" }
 $skip = @{}
 function RunOne($from, $to, $label) {
+    $fromPid = PidOf $from; $toPid = PidOf $to                                        # once: PidOf inside the log filters ran a process query per log line (minutes)
     $ptr = $null; $name = ""
-    foreach ($m in [regex]::Matches((Probe $from "chestlist 80 1"), "CHEST ([0-9A-F]{16}) (\S+) items")) {          # one call: every chest that has something inside
-        if (-not $skip[$m.Groups[1].Value]) { $ptr = $m.Groups[1].Value; $name = $m.Groups[2].Value; break }
+    $hp = [regex]::Match((Probe $from "heroinfo"), "HEROINFO pos (-?\d+) (-?\d+)"); $hx = [int]$hp.Groups[1].Value; $hy = [int]$hp.Groups[2].Value; $bd0 = 1e9
+    foreach ($m in [regex]::Matches((Probe $from "chestlist 200 1"), "CHEST ([0-9A-F]{16}) (\S+) items \d+ \+ \d+ pos (-?\d+) (-?\d+)")) {          # one call: every chest that has something inside; the one nearest to the hero (loaded in both copies)
+        if ($skip[$m.Groups[1].Value]) { continue }
+        $d0 = [math]::Sqrt([math]::Pow([int]$m.Groups[3].Value - $hx, 2) + [math]::Pow([int]$m.Groups[4].Value - $hy, 2)); if ($d0 -lt $bd0) { $bd0 = $d0; $ptr = $m.Groups[1].Value; $name = $m.Groups[2].Value }
     }
     Check "$label setup: a chest with something inside is loaded" ([bool]$ptr) $ptr
     if (-not $ptr) { return }
@@ -27,8 +30,8 @@ function RunOne($from, $to, $label) {
     $mark0 = (Get-Content $log | Measure-Object -Line).Lines
     $tracked = $false                                                          # wait until BOTH copies track this chest (loaded and found by the item scan)
     for ($w = 0; $w -lt 40 -and -not $tracked; $w++) {
-        Start-Sleep 1; $n0 = Get-Content $log | Select-Object -Skip $mark0
-        $tracked = (@($n0 | Where-Object { $_ -match "^\[$(PidOf $from)\] S chest tracked: $([regex]::Escape($name))," }).Count -ge 1) -and (@($n0 | Where-Object { $_ -match "^\[$(PidOf $to)\] S chest tracked: $([regex]::Escape($name))," }).Count -ge 1)
+        Start-Sleep 1; $n0 = Get-Content $log                                       # the whole log: a chest that was already tracked earlier is not logged again
+        $tracked = (@($n0 | Where-Object { $_ -match "^\[$fromPid\] S chest tracked: $([regex]::Escape($name))," }).Count -ge 1) -and (@($n0 | Where-Object { $_ -match "^\[$toPid\] S chest tracked: $([regex]::Escape($name))," }).Count -ge 1)
     }
     Check "$label the chest is tracked in both copies" $tracked $name
     if (-not $tracked) { return }
@@ -36,8 +39,8 @@ function RunOne($from, $to, $label) {
     $r = Probe $from "emptychest 0x$ptr"
     Start-Sleep 8
     $new = Get-Content $log | Select-Object -Skip $mark
-    $sent = @($new | Where-Object { $_ -match "^\[$(PidOf $from)\] S chest .* emptied here" })
-    $got = @($new | Where-Object { $_ -match "^\[$(PidOf $to)\] S chest .* emptied" })
+    $sent = @($new | Where-Object { $_ -match "^\[$fromPid\] S chest .* emptied here" })
+    $got = @($new | Where-Object { $_ -match "^\[$toPid\] S chest .* emptied" })
     Check "$label the looting copy notices the empty chest" ($sent.Count -eq 1) ($sent | Select-Object -First 1)
     Check "$label the other copy empties the same chest" ($got.Count -ge 1) ($got | Select-Object -First 1)
 }

@@ -243,3 +243,15 @@ A mirrored NPC keeps its own AI running (its controller must stay possessed). Th
 ## Addendum 7 (end of session 2026-10-31)
 - Chest test: uses the new one-call probe `chestlist` and waits until both copies track the chest; the last full run of the four sync tests was interrupted before it finished (the watchdog's 25 minute limit stopped the games earlier; the limit is now 60 min). Last known results: story 6/6, items 8/8, loot 10/10, chests 4/6 (flaky: depends on which chest is picked and whether it is loaded in both copies).
 - Not verified yet: the NPC montage sync by eye in the game; the loot replay with a take made by hand in the UI after the leak fix.
+
+## Addendum 8: test results after the leak fix and test repairs
+
+Last results with a clean start of both (lite) copies: story 6/6, chests 8/8, items 8/8 (run on the same games), loot 10/10 (run several times). Repaired on the way (all were test or module-noise problems, not sync bugs):
+- the tests ran a process query per log line (`PidOf` inside the log filter): minutes per check; computed once now;
+- variable name clash (`$pf`/`$pt` used for pids and chest pointers in the loot test);
+- the item and chest tests teleported the heroes far away and waited for new world cells; they now use objects near the heroes, and for items only an item that exists in BOTH copies (items dropped by NPCs differ between the copies);
+- loot pouches (`BP_Pouch_C`) are created and removed by the game all the time: they are no longer treated as pickups by the module (they produced false pickups and could remove pouches in the other copy);
+- the tests looked for the log text "removed" while the module says "the other player picked it up";
+- chests were looked for in new log lines only, but an already tracked chest is not logged again.
+**The sync tests change the world (empty chests, take items): run `tools\tests\run_sync.ps1 -Start` (fresh start) for a trustworthy result; repeated runs on the same games drift.**
+Not verified: the NPC montage sync by eye; a chest take made by hand through the UI after the leak fix; behaviour with real players over a network.

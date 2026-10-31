@@ -158,7 +158,7 @@ static int cls_has_item(CoreAPI *a, uint8_t *k, int *idoff)
     int has = 0, io = -1;
     if (a->find_prop_offset(k, "m_PersistentId") >= 0) {
         io = a->find_prop_offset(k, "m_PersistentId");
-        if (a->find_prop_offset(k, "m_WorldItemDefinition") >= 0) has = 1;
+        if (a->find_prop_offset(k, "m_WorldItemDefinition") >= 0) { has = 1; char pn[96]; a->obj_name(k, pn, sizeof pn); for (char *c = pn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32; if (strstr(pn, "pouch")) has = 0; }          /* loot pouches: the game creates and removes them by itself all the time, they are not pickups */
         else if (a->find_prop_offset(k, "m_DataModuleComponent") >= 0) { char cn[96]; a->obj_name(k, cn, sizeof cn); for (char *c = cn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32; if (strstr(cn, "chest")) has = 2; }
     }
     if (!has) { char cn[96]; a->obj_name(k, cn, sizeof cn); for (char *c = cn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32;

@@ -15,11 +15,17 @@ Restore-Heroes
 $flag = Join-Path $c "native\build\scan_fast.txt"; Set-Content $flag "1"                  # whole-world item scan in ~2 s instead of 15 s while the test runs
 function ChestPtr($seat) { [regex]::Match((Probe $seat "ioscan Chest 80"), "([0-9A-F]{16}) Interactive_Chest_Right_Variant_C_UAID_E89C256C6855A5DA02_1705760755").Groups[1].Value }
 function RunOne($from, $to, $label, $itemId) {
+    $fromPid = PidOf $from; $toPid = PidOf $to                                        # once: PidOf inside the log filters ran a process query per log line (minutes)
     $pf = ChestPtr $from; $pt = ChestPtr $to                                    # a chest whose items have the ids 1, 2 and 3 after a fresh start (seen when a player took them)
     Check "$label setup: the same chest is loaded in both copies" ([bool]($pf -and $pt)) "$pf $pt"
     if (-not ($pf -and $pt)) { return }
     Probe $from "tpto 0x$(Hero $from) 0x$pf 0 -130 40" | Out-Null; Probe $to "tpto 0x$(Hero $to) 0x$pt 0 -130 40" | Out-Null      # both heroes stand in front of the chest
-    Start-Sleep 10                                                              # the chest gets tracked
+    $cn = "Interactive_Chest_Right_Variant_C_UAID_E89C256C6855A5DA02_1705760755"; $tracked = $false                  # wait (up to 40 s) until both copies track the chest
+    for ($w = 0; $w -lt 40 -and -not $tracked; $w++) {
+        $all = Get-Content $log
+        $tracked = (@($all | Where-Object { $_ -match "^\[$fromPid\] S chest tracked: $cn," }).Count -ge 1) -and (@($all | Where-Object { $_ -match "^\[$toPid\] S chest tracked: $cn," }).Count -ge 1)
+        if (-not $tracked) { Start-Sleep 1 }
+    }
     $mod = [regex]::Match((Probe $from "contdump 0x$pf"), "container ([0-9A-F]{16})").Groups[1].Value
     Check "$label setup: the chest has a container module" ([bool]$mod) $mod
     if (-not $mod) { return }
@@ -28,13 +34,13 @@ function RunOne($from, $to, $label, $itemId) {
     $sent = @(); $got = @()
     for ($w = 0; $w -lt 15 -and -not ($sent.Count -ge 1 -and $got.Count -ge 1); $w++) {
         Start-Sleep 1; $new = Get-Content $log | Select-Object -Skip $mark
-        $sent = @($new | Where-Object { $_ -match "^\[$(PidOf $from)\] S loot: chest .* item id $itemId x1 taken here" })
-        $got = @($new | Where-Object { $_ -match "^\[$(PidOf $to)\] S loot: chest .* item id $itemId x1 taken by the other player \(replay ok\)" })
+        $sent = @($new | Where-Object { $_ -match "^\[$fromPid\] S loot: chest .* item id $itemId x1 taken here" })
+        $got = @($new | Where-Object { $_ -match "^\[$toPid\] S loot: chest .* item id $itemId x1 taken by the other player \(replay ok\)" })
     }
     Check "$label the take is noticed on the copy that made it (once)" ($sent.Count -eq 1) ($sent | Select-Object -First 1)
     Check "$label the other copy replays it on the same chest" ($got.Count -ge 1) ($got | Select-Object -First 1)
     Start-Sleep 3; $new = Get-Content $log | Select-Object -Skip $mark
-    $echo = @($new | Where-Object { $_ -match "^\[$(PidOf $to)\] S loot: chest .* item id $itemId x1 taken here" -or $_ -match "^\[$(PidOf $from)\] S loot: chest .* item id $itemId x1 taken by the other player" })
+    $echo = @($new | Where-Object { $_ -match "^\[$toPid\] S loot: chest .* item id $itemId x1 taken here" -or $_ -match "^\[$fromPid\] S loot: chest .* item id $itemId x1 taken by the other player" })
     Check "$label no echo back" ($echo.Count -eq 0) ($echo | Select-Object -First 1)
 }
 RunOne 0 1 "host->guest" 1
