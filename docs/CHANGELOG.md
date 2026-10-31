@@ -203,3 +203,15 @@ Kept here on purpose so they are not repeated.
 - **Verified:** all seven hooks install, the game keeps running, and a call made through the probe (`Server_ConsumeItem` with a dummy id) shows up in the log with its exact parameters.
 - **Not done:** (1) a real loot by a player was not observed yet (injected input did not open the chest UI: the chest was probably not targeted); play once with the log open and read the `S obs` lines to learn which of the seven functions the UI really calls and whether the parameters arrive in a buffer; (2) the replay on the other copy (which item ids, how to remove them from the chest without giving them to the other hero) is not written; (3) `Server_ConsumeItem` and `Server_EmptyInventory`-style calls made from the probe fault without server authority, so a replay must probably write the container map directly or call the `Multicast_*` variants.
 - Probe commands added: `fninfo <Outer> <Function>` (UFunction, native body RVA, parameters), `structinfo`, `peek`, `contdump`.
+
+## Addendum 3: what the game calls when a player takes items from a chest (observed live)
+
+Taking an item (click on the slot or "Take all") makes the game call, on the **chest's** `DataModule_Container` module, once per item stack:
+1. `Server_MoveItemFromActorToOtherActor(Actor = chest, OtherActor = hero, ItemPos = n, InventorySlot = 1, Amount = -1, targetInventorySlot = 0)`
+2. `Server_ConsumeItem(InventoryType = 1, ID = n, ItemAmount = stack size)`
+
+The parameters arrive in the `ProcessEvent` parameter buffer, so the observer sees them. "Take all" is simply this pair repeated for ids n = 3, 2, 1, ... The ids of a chest's items are small numbers that count from 0 (the same state loaded in both copies gives the same ids).
+
+**Replay (written, NOT verified):** the story module records every `Server_ConsumeItem` the game makes on a tracked chest's module and sends `(chest key, type, id, amount)` on the story channel (acknowledged and de-duplicated by a loot id); the other copy calls `Server_ConsumeItem` with the same parameters on the same chest and does not echo it back (a short suppression list). `tools/tests/test_loot.ps1` exercises the pipeline with an invented item id; in the one run seen so far the take was noticed on the first copy but the replay on the second copy reported `failed` (the call returned 0), and the run then hung and was stopped by hand. Not known: whether the call fails because the invented id does not exist in that chest or because it needs authority; whether the chest then really shows one item less. The test should use real ids (read them from a take made by hand: the `S obs` lines show them).
+
+A chest UI that opened with empty panels and "Label" placeholders was seen in one copy during that run; the most likely cause is test interference (invented item ids, teleports while the window was open), not verified.

@@ -36,7 +36,12 @@ static struct {
     int hist[256]; int histlogged;
     /* world items: picked up here -> removed there (matched by the persistent id every placed actor has) */
     It it[MAXI]; int nit; Gone gone[128]; int ngone; uint8_t removed[2048][16]; int nremoved;
-    uint8_t *cls_cont; int keep_birds, n_birds; int n_chest_sent, n_chest_applied; uint8_t *cls_ok[300]; uint8_t cls_has[300]; int ncls; int it_off_cache; int isc_pos; int n_pick_sent, n_pick_applied;
+    uint8_t *cls_cont; int keep_birds, n_birds;
+    /* container loot: Server_ConsumeItem calls the game makes on a tracked chest's module (a player took items out) are replayed on the other copy */
+    struct { uint32_t lid; uint8_t id[16]; uint8_t type; int32_t item, amount; unsigned sent; } lootq[64]; int nloot; uint32_t loot_next;
+    uint32_t seen_lid[256]; int nseen;
+    struct { uint8_t id[16]; uint8_t type; int32_t item, amount; unsigned long t; } supp[16]; int nsupp;
+    struct { uint8_t id[16]; uint8_t type; int32_t item, amount; } lootpend[32]; int nlootpend; int n_loot_sent, n_loot_applied; int n_chest_sent, n_chest_applied; uint8_t *cls_ok[300]; uint8_t cls_has[300]; int ncls; int it_off_cache; int isc_pos; int n_pick_sent, n_pick_applied;
 } S;
 
 __declspec(dllexport) void mod_init(CoreAPI *a) { (void)a; memset(&S, 0, sizeof S); }
@@ -138,6 +143,7 @@ static int write_state(CoreAPI *a, Q *q, uint8_t st, int bulk)
     return a->write_mem(q->ptr + S.state_off, &st, 1);
 }
 
+static void loot_apply(CoreAPI *a, It *t, uint8_t type, int32_t item, int32_t amount);
 static int cls_has_item(CoreAPI *a, uint8_t *k, int *idoff)
 {
     for (int i = 0; i < S.ncls; i++) if (S.cls_ok[i] == k) { if (S.cls_has[i] == 1 || S.cls_has[i] == 2) *idoff = a->find_prop_offset(k, "m_PersistentId"); return S.cls_has[i]; }
@@ -212,7 +218,10 @@ static void scan_items(CoreAPI *a, double *hp)
         if (t->chest) { t->id[14] ^= 0xC3; t->mod = chest_module(a, o); if (!t->mod) continue; t->base = chest_count(a, t->mod); if (t->base < 0) continue; }
         if (t->chest && is_removed(t->id)) { chest_empty(a, t); S.n_chest_applied++; a->log("S chest %s emptied on arrival (looted by the other player)", nm); S.nit++; continue; }
         if (is_removed(t->id)) { a->destroy_actor(o); a->log("S item %s removed on arrival (picked up by the other player)", nm); continue; }
-        if (t->chest) a->log("S chest tracked: %s, %d items", nm, t->base);
+        if (t->chest) {
+            a->log("S chest tracked: %s, %d items", nm, t->base);
+            for (int k = 0; k < S.nlootpend; ) { if (!memcmp(S.lootpend[k].id, t->id, 16)) { loot_apply(a, t, S.lootpend[k].type, S.lootpend[k].item, S.lootpend[k].amount); S.lootpend[k] = S.lootpend[--S.nlootpend]; } else k++; }
+        }
         S.nit++;
     }
     S.isc_pos = end;
@@ -255,6 +264,15 @@ static void check_items(CoreAPI *a, double *hp)
     for (int j = 0; j < S.nit; ) { if (!S.it[j].ptr) S.it[j] = S.it[--S.nit]; else j++; }
 }
 
+/* replay of a take: the game's own Server_ConsumeItem on the same chest (the same call the game made on the other copy); our own observer must not send it back */
+static void loot_apply(CoreAPI *a, It *t, uint8_t type, int32_t item, int32_t amount)
+{
+    const char *names[3] = { "InventoryType", "ID", "ItemAmount" }; const void *vals[3] = { &type, &item, &amount }; int sizes[3] = { 1, 4, 4 };
+    if (S.nsupp < 16) { memcpy(S.supp[S.nsupp].id, t->id, 16); S.supp[S.nsupp].type = type; S.supp[S.nsupp].item = item; S.supp[S.nsupp].amount = amount; S.supp[S.nsupp].t = GetTickCount(); S.nsupp++; }
+    int ok = a->call_fn(t->mod, "DataModule_Container", "Server_ConsumeItem", 3, names, vals, sizes, NULL, 0);
+    S.n_loot_applied++; a->log("S loot: chest %s, item id %d x%d taken by the other player (replay %s)", t->name, item, amount, ok ? "ok" : "failed");
+}
+
 /* ---- loot observer: which container functions does the game call when a player takes items? (logged for now; see docs/CHANGELOG.md) ---- */
 static const char *OBS_FNS[] = { "Server_MoveItemTo", "Server_MoveItemFromActorToOtherActor", "Server_AddAllItemsFromContainer", "Server_GetItemsFromContainerInv", "Server_PickWorldItem", "Server_ConsumeItem", "Server_AddNewItem" };
 static int obs_ready, obs_slot[8];
@@ -267,8 +285,22 @@ static void obs_tick(CoreAPI *a)
         const char *fn = "?"; for (int i = 0; i < 7; i++) if (obs_slot[i] == slot) fn = OBS_FNS[i];
         char nm[100] = "?"; if (obj) a->obj_name(obj, nm, sizeof nm);
         char hx[420] = ""; for (int k = 0; k < plen && k < 100; k++) { char t[4]; sprintf(t, "%02x", pb[k]); strcat(hx, t); if (k % 4 == 3) strcat(hx, " "); }
-        a->log("S obs %s on %s%s: %s", fn, nm, hl ? "" : " (no parameter buffer: bytecode call)", hx);
-        for (int q = 0; q + 8 <= plen; q += 8) { uint8_t *pp; memcpy(&pp, pb + q, 8); if ((uintptr_t)pp > 0x10000 && a->obj_alive(pp, NULL)) { char on[100]; a->obj_name(pp, on, sizeof on); a->log("S obs   param @%d = %s", q, on); } }
+        char own[120] = ""; for (int j = 0; j < S.nit; j++) if (S.it[j].chest && S.it[j].mod == obj) { snprintf(own, sizeof own, " [module of chest %s]", S.it[j].name); break; }
+        if (hl && plen >= 12 && !strcmp(fn, "Server_ConsumeItem")) {                                   /* a take out of a tracked chest */
+            for (int j = 0; j < S.nit; j++) if (S.it[j].chest && S.it[j].mod == obj) {
+                uint8_t ty = pb[0]; int32_t it_, am; memcpy(&it_, pb + 4, 4); memcpy(&am, pb + 8, 4);
+                int mine = 0; unsigned long nowt = GetTickCount();
+                for (int k = 0; k < S.nsupp; k++) { if (nowt - S.supp[k].t > 8000) { S.supp[k] = S.supp[--S.nsupp]; k--; continue; }
+                    if (!memcmp(S.supp[k].id, S.it[j].id, 16) && S.supp[k].type == ty && S.supp[k].item == it_ && S.supp[k].amount == am) { mine = 1; S.supp[k] = S.supp[--S.nsupp]; break; } }
+                if (!mine && S.nloot < 64) {
+                    S.lootq[S.nloot].lid = ++S.loot_next; memcpy(S.lootq[S.nloot].id, S.it[j].id, 16); S.lootq[S.nloot].type = ty; S.lootq[S.nloot].item = it_; S.lootq[S.nloot].amount = am; S.lootq[S.nloot].sent = 0; S.nloot++;
+                    S.n_loot_sent++; a->log("S loot: chest %s, item id %d x%d taken here", S.it[j].name, it_, am);
+                }
+                break;
+            }
+        }
+        a->log("S obs %s on %s%s%s: %s", fn, nm, own, hl ? "" : " (no parameter buffer: bytecode call)", hx);
+        for (int q = 0; q + 8 <= plen; q += 8) { uint8_t *pp; memcpy(&pp, pb + q, 8); int32_t oi = 0; if ((uintptr_t)pp > 0x10000 && a->read_mem(pp + 0xc, &oi, 4) && oi > 0 && oi < a->num_objects() && a->object_at(oi) == pp) { char on[100]; a->obj_name(pp, on, sizeof on); a->log("S obs   param @%d = %s", q, on); } }
     }
 }
 
@@ -282,6 +314,7 @@ static void apply_remote(CoreAPI *a, const uint8_t *B, int len)
     for (int i = 0; i < S.nq; i++) if (S.q[i].pend && S.q[i].sent && (int16_t)(uint16_t)(ack - S.q[i].sent) >= 0) { S.q[i].base = S.q[i].sentv; S.q[i].pend = 0; S.q[i].sent = 0; }
     int p = 11;
     int nit = B[9] | (B[10] << 8); if (nit > 0) S.ack_dirty = 1;
+    for (int i = 0; i < S.nloot; ) { if (S.lootq[i].sent && (int16_t)(uint16_t)(ack - S.lootq[i].sent) >= 0) S.lootq[i] = S.lootq[--S.nloot]; else i++; }
     for (int i = 0; i < S.ngone; ) { if (S.gone[i].sent && (int16_t)(uint16_t)(ack - S.gone[i].sent) >= 0) S.gone[i] = S.gone[--S.ngone]; else i++; }
     if (p + nwd * 6 + nq * 5 + nit * 16 > len) return;
     for (int k = 0; k < nwd; k++, p += 6) {
@@ -308,6 +341,17 @@ static void apply_remote(CoreAPI *a, const uint8_t *B, int len)
             a->destroy_actor(S.it[j].ptr); S.it[j] = S.it[--S.nit]; S.n_pick_applied++; break;
         }
     }
+    if (p + 2 <= len) {
+        int nl = B[p] | (B[p + 1] << 8); p += 2; if (nl > 0) S.ack_dirty = 1;
+        for (int k = 0; k < nl && p + 29 <= len; k++, p += 29) {
+            uint32_t lid; memcpy(&lid, B + p, 4); const uint8_t *id = B + p + 4; uint8_t ty = B[p + 20]; int32_t item, am; memcpy(&item, B + p + 21, 4); memcpy(&am, B + p + 25, 4);
+            int seen = 0; for (int q = 0; q < S.nseen && q < 256; q++) if (S.seen_lid[q] == lid) { seen = 1; break; }
+            if (seen) continue;
+            S.seen_lid[S.nseen++ & 255] = lid; if (S.nseen > 100000) S.nseen = 256;
+            int done = 0; for (int j = 0; j < S.nit; j++) if (S.it[j].chest && !memcmp(S.it[j].id, id, 16)) { loot_apply(a, &S.it[j], ty, item, am); done = 1; break; }
+            if (!done && S.nlootpend < 32) { memcpy(S.lootpend[S.nlootpend].id, id, 16); S.lootpend[S.nlootpend].type = ty; S.lootpend[S.nlootpend].item = item; S.lootpend[S.nlootpend].amount = am; S.nlootpend++; }
+        }
+    }
     (void)full; (void)ack;
 }
 
@@ -319,6 +363,9 @@ static void send_blob(CoreAPI *a)
     for (int i = 0; i <= S.nw && p + 6 < 4400; i++) if (S.pend[i]) { buf[p] = (uint8_t)i; buf[p + 1] = (uint8_t)(i >> 8); memcpy(buf + p + 2, &S.cur[i], 4); p += 6; nwd++; S.sent[i] = S.my_seq; S.sentv[i] = S.cur[i]; }
     for (int i = 0; i < S.nq && p + 5 < 8700; i++) if (S.q[i].pend) { memcpy(buf + p, &S.q[i].id, 4); buf[p + 4] = S.q[i].cur; p += 5; nq++; S.q[i].sent = S.my_seq; S.q[i].sentv = S.q[i].cur; }
     int ni = 0; for (int i = 0; i < S.ngone && p + 16 < 8800; i++) { memcpy(buf + p, S.gone[i].id, 16); p += 16; ni++; S.gone[i].sent = S.my_seq; }
+    { int nl = 0, lp = p; p += 2;
+      for (int i = 0; i < S.nloot && p + 29 < 8800; i++) { memcpy(buf + p, &S.lootq[i].lid, 4); memcpy(buf + p + 4, S.lootq[i].id, 16); buf[p + 20] = S.lootq[i].type; memcpy(buf + p + 21, &S.lootq[i].item, 4); memcpy(buf + p + 25, &S.lootq[i].amount, 4); p += 29; nl++; S.lootq[i].sent = S.my_seq; }
+      buf[lp] = (uint8_t)nl; buf[lp + 1] = (uint8_t)(nl >> 8); }
     buf[9] = (uint8_t)ni; buf[10] = (uint8_t)(ni >> 8);
     buf[0] = 1; buf[1] = (uint8_t)S.my_seq; buf[2] = (uint8_t)(S.my_seq >> 8); buf[3] = (uint8_t)S.remote_last_seq_u16; buf[4] = (uint8_t)(S.remote_last_seq_u16 >> 8);
     buf[5] = (uint8_t)nwd; buf[6] = (uint8_t)(nwd >> 8); buf[7] = (uint8_t)nq; buf[8] = (uint8_t)(nq >> 8); 
@@ -377,7 +424,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
             a->obj_name(S.q[i].ptr, nm, sizeof nm); a->log("S state %d example %s:%s", v, nm, res); shown++; (void)r; } }
     }
     { double hp[3]; if (loc_of(a, a->hero, hp)) { scan_items(a, hp); check_items(a, hp); } }
-    int anyp = S.ngone > 0; for (int i = 0; i <= S.nw && !anyp; i++) anyp = S.pend[i]; for (int i = 0; i < S.nq && !anyp; i++) anyp = S.q[i].pend;
+    int anyp = S.ngone > 0 || S.nloot > 0; for (int i = 0; i <= S.nw && !anyp; i++) anyp = S.pend[i]; for (int i = 0; i < S.nq && !anyp; i++) anyp = S.q[i].pend;
     if (anyp || S.ack_dirty) send_blob(a);
     if (now - S.last_stat > 10000) {
         S.last_stat = now;
