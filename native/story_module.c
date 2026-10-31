@@ -237,6 +237,7 @@ static void scan_items(CoreAPI *a, double *hp)
             int knownb = 0; for (int j = 0; j < S.nit; j++) if (S.it[j].ptr == o) { knownb = 1; break; } if (knownb) continue;
             uint32_t fl = 0; a->read_mem(o + 8, &fl, 4); if ((fl & 0x8000) || a->read_bool(o, "bActorIsBeingDestroyed") == 1) continue;
             char bn[96]; a->obj_name(o, bn, sizeof bn); if (!strncmp(bn, "Default__", 9)) continue;
+            if (!strncmp(bn, "PlayerCharacter", 15)) { far_set(o, tnow + 600000); continue; }          /* the player's own inventory is not a loot body: a replayed consume would remove an item from the friend's hero */
             double bp[3]; if (!loc_of(a, o, bp)) continue; double bx = bp[0] - hp[0], by = bp[1] - hp[1];
             if (bx * bx + by * by > 3500.0 * 3500.0) { far_set(o, tnow + (S.fast_scan ? 4000 : 12000)); continue; }
             uint8_t *bm = body_module(a, o); if (!bm) { far_set(o, tnow + 20000); continue; }
