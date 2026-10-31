@@ -924,6 +924,19 @@ static void skvis(int vis)                                 /* the puppet's mesh 
     if (!g_setvis.fn) return;
     uint8_t v = (uint8_t)vis, prop = 0, *b = pnew(&g_setvis); pset(&g_setvis, b, "bNewVisibility", &v, 1); pset(&g_setvis, b, "bPropagateToChildren", &prop, 1); pcall(T.skcomp, &g_setvis, b); _aligned_free(b);
 }
+static int g_spawn_done;                                   /* the guest is moved next to the host once per world, when both heroes stand on the same spot */
+static void spawn_apart(double fx, double fy, double fz)
+{
+    if (g_spawn_done || !T.hero || T.id[0] != 'S' || T.id[1] != '1' || !T.setloc.fn) return;
+    g_spawn_done = 1;
+    double h[3]; read_hero_pos(h);
+    double dx = h[0] - fx, dy = h[1] - fy;
+    if (sqrt(dx * dx + dy * dy) > 150.0 || fabs(h[2] - fz) > 200.0) return;        /* not on top of the host: nothing to do */
+    Vec3 np = { fx + 180.0, fy, fz };
+    uint8_t *b = pnew(&T.setloc), sweep = 0, tele = 1; pset(&T.setloc, b, "NewLocation", &np, 24); pset(&T.setloc, b, "bSweep", &sweep, 1); pset(&T.setloc, b, "bTeleport", &tele, 1);
+    int ok = pcall(T.hero, &T.setloc, b); _aligned_free(b);
+    logf_("N3 spawn: the guest stood on the host's spot, moved 180 units aside (ok=%d)", ok);
+}
 static void module_frame(void)  { module_run(0); }     /* modules that need the puppet */
 static void module_always(void)  { module_run(1); }     /* modules that run every tick */
 
@@ -934,7 +947,7 @@ static void frame_work(void)
     /* the hero object can die on level load: re-resolve (marker belonged to the old level too) */
     if (T.step >= 1 && T.step != 99 && get_object(T.hero_idx) != T.hero) {
         logf_("N3 hero changed, re-resolving");
-        T.hero = NULL; T.marker = NULL; T.step = 0; T.have_remote = 0;
+        T.hero = NULL; T.marker = NULL; T.step = 0; T.have_remote = 0; g_spawn_done = 0;
     }
     switch (T.step) {
     case 0: {   /* resolve everything */
@@ -1160,7 +1173,7 @@ static void frame_work(void)
             }
             T.anim_jump = find_anim("A_Man_N_Run_Jump_Loop"); root_obj(T.anim_jump);
             logf_("N6 jump loop clip = %p", T.anim_jump);
-            T.skcomp = comp; T.anim_state = -1; T.cand_state = 0;
+            T.skcomp = comp; skvis(0); T.anim_state = -1; T.cand_state = 0;
             for (int mi = 0; mi < g_nmods; mi++) g_mods[mi].need_init = 1;                              /* a (re)created puppet: let the module look its clips up again */
             T.step = 4; T.frame = 0;
             break;
@@ -1332,12 +1345,12 @@ static void frame_work(void)
                     }
                     T.last_rp[0] = x; T.last_rp[1] = y; T.last_rp[2] = z; T.last_rt = nowt;
                     T.rpos[0] = x; T.rpos[1] = y; T.rpos[2] = z; T.ryaw = yaw;
-                    if (!T.have_remote) { T.shown[0] = x; T.shown[1] = y; T.shown[2] = z; logf_("N3 first packet from %s at %.0f %.0f %.0f", pid, x, y, z); skvis(1); }
+                    if (!T.have_remote) { T.shown[0] = x; T.shown[1] = y; T.shown[2] = z; logf_("N3 first packet from %s at %.0f %.0f %.0f", pid, x, y, z); skvis(1); spawn_apart(x, y, z); }
                     T.have_remote = 1;
                 }
             }
         }
-        if (!T.have_remote && T.marker && T.skcomp && T.frame % 20 == 0) skvis(0);
+        if (!T.have_remote && T.marker && T.skcomp && T.frame % 3 == 0) skvis(0);
         if (T.have_remote && T.marker && T.puppet_char == 2 && T.skcomp && T.playanim.fn) module_frame();
         if (T.have_remote && T.marker) {
             for (int k = 0; k < 3; k++) T.shown[k] += (T.rpos[k] - T.shown[k]) * 0.35;   /* smooth 20 Hz data */

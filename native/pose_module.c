@@ -380,7 +380,7 @@ static void interp_apply(CoreAPI *a)
 {
     if (!I.have_pose || P.away || !P.comp) return;
     double t0 = now_ms();
-    double alpha = (t0 - I.t0) / (I.dt > 0 ? I.dt : 50.0); if (alpha > 1) alpha = 1; if (alpha < 0) alpha = 0;
+    double alpha = (t0 - I.t0) / (I.dt > 0 ? I.dt : 50.0); if (alpha > 1.2) alpha = 1.2; if (alpha < 0) alpha = 0;           /* a late packet: keep moving a little past the target (extrapolation) instead of freezing until it arrives */
     I.frame++;
     if (I.stride == 2 && (I.frame & 1) && alpha < 1) return;         /* over budget: every second frame (the last step of an interval is always applied) */
     uint8_t space = P.mode == 2 ? 0 : 1; int applied = 0;
@@ -399,7 +399,7 @@ static void interp_apply(CoreAPI *a)
         a->call_fn(P.comp, "PoseableMeshComponent", "SetBoneTransformByName", 3, names, vals, sizes, NULL, 0);
         memcpy(I.cur[i].q, tr.q, sizeof tr.q); memcpy(I.cur[i].t, tr.t, sizeof tr.t);
         applied++;
-        if (alpha >= 1) I.active[i] = 0;                               /* arrived */
+        if (alpha >= 1.2) I.active[i] = 0;                             /* arrived */
     }
     double ms = now_ms() - t0;
     I.cost = I.cost > 0 ? I.cost * 0.95 + ms * 0.05 : ms;
