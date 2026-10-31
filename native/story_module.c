@@ -428,7 +428,7 @@ static void apply_remote(CoreAPI *a, const uint8_t *B, int len)
         int32_t oldv = 0; if (idx == S.nw) a->read_mem(S.story + off, &oldv, 4);
         if (a->write_mem(S.story + off, &v, 4)) {
             S.cur[idx] = v; S.base[idx] = v; S.pend[idx] = 0; S.n_applied_w++;
-            if (idx == S.nw && oldv > 0 && v == oldv + 1) {                                 /* the other copy entered the next chapter: its banner comes here with the chapter number (the game's own call is not seen by the observer at the real trigger point) */
+            if (idx == S.nw && oldv >= 0 && v == oldv + 1 && GetTickCount() - S.last_hero_t > 30000) {         /* 0 -> 1 is the first chapter; the first 30 s after a world load are the join sync, no banner then */                                 /* the other copy entered the next chapter: its banner comes here with the chapter number (the game's own call is not seen by the observer at the real trigger point) */
                 int32_t ch = v; const char *nn[1] = { "NewChapter" }; const void *vv[1] = { &ch }; int sz[1] = { 4 };
                 int ok = a->call_fn(S.story, "GameStory", "RequestChapterHUDNotification", 1, nn, vv, sz, NULL, 0);
                 a->log("S chapter %d -> %d came from the other copy: banner %s", oldv, v, ok ? "shown" : "failed");
