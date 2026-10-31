@@ -25,6 +25,11 @@ Last updated: 2026-10-30
 - Arrow count on the puppet's quiver can only go down.
 - **Resolved (2026-10-30):** equipment / quick-slot bar missing in the second copy was caused by GPU memory pressure (two copies on an 8 GB card); with memory freed everything shows. If it returns, lower texture quality for both copies in the Couchlink recipe.
 
+## Shared world (2026-10-31)
+
+- Verified by the automated test (`tools\test_ko.ps1`, pictures in `docs\img\ko_*.png`): the host hero fights an NPC with real game input actions, the NPC lies knocked out, and the guest sees the same NPC lying in the same place (bone-pose copy of the closest NPCs, no clip guessing).
+- Not done: health / death shared, the guest's own hits on NPCs, standing-up transitions checked, animals use the same path but are untested, arrows in flight.
+
 ## Not started
 
 - Real two-PC test of the direct-IP transport (`tools/join.ps1` exists, verified on loopback only), Steam relay, and bone-pose compression for the internet. Postponed until the one-PC sync is finished.

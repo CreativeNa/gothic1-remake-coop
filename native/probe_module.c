@@ -213,11 +213,17 @@ static void cmd_help(void)
     P("  purge <classSub> [max]         destroy actors whose class contains the text, that are not CDOs and have NO Owner (leftovers of failed spawns)");
 }
 
+static int al_seat(void);
 static void run_command(char *line)
 {
     char *tok[24]; int nt = 0;
     for (char *p = strtok(line, " \t\r"); p && nt < 24; p = strtok(NULL, " \t\r")) tok[nt++] = p;
     if (!nt) return;
+    if (tok[0][0] == '@') {                                              /* "@0 <command>": run only in the copy of that seat (the command file is read by every copy) */
+        if (atoi(tok[0] + 1) != al_seat()) return;
+        for (int i = 1; i < nt; i++) tok[i - 1] = tok[i];
+        if (--nt == 0) return;
+    }
     const char *c = tok[0];
     P("> %s%s%s%s%s", tok[0], nt > 1 ? " " : "", nt > 1 ? tok[1] : "", nt > 2 ? " " : "", nt > 2 ? tok[2] : "");
 
@@ -298,11 +304,26 @@ static void run_command(char *line)
         double hl[3] = { 0 }, tl[3] = { 0 };
         A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hl, 24); A->call_fn(t, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, tl, 24);
         double dx = tl[0] - hl[0], dy = tl[1] - hl[1], dz = tl[2] - hl[2], hz = sqrt(dx * dx + dy * dy);
-        double rot[3] = { -atan2(dz, hz) * 57.29578 - 5.0, atan2(dy, dx) * 57.29578 + (nt > 2 ? atof(tok[2]) : 0), 0 };      /* pitch, yaw, roll */
+        double rot[3] = { -atan2(dz, hz) * 57.29578 - 5.0, atan2(dy, dx) * 57.29578 + (nt > 2 ? atof(tok[2]) : 0), 0 };
+        if (nt > 3) rot[0] = atof(tok[3]);                                   /* optional pitch override (e.g. -55 = looking steeply down) */      /* pitch, yaw, roll */
         int oc = A->find_prop_offset(A->obj_class(A->hero), "Controller"); uint8_t *ctl = NULL; if (oc >= 0) A->read_mem(A->hero + oc, &ctl, 8);
         if (!ctl) { P("no controller"); return; }
         const char *n[1] = { "NewRotation" }; const void *v[1] = { rot }; int sz[1] = { 24 };
         P("lookat ran: %d (yaw %.0f pitch %.0f)", A->call_fn(ctl, "Controller", "SetControlRotation", 1, n, v, sz, NULL, 0), rot[1], rot[0]); return;
+    }
+    if (!strcmp(c, "inject") && nt >= 2) {                               /* inject <InputActionName> [value]: press an Enhanced Input action as the local player (e.g. IA_Ability_Action_EquipWeaponAuto, IA_Combat_Attack_Top) */
+        if (!A->hero) { P("no hero"); return; }
+        uint8_t *act = NULL; int n = A->num_objects(); char cn[96], nm[160];
+        for (int i = 0; i < n && !act; i++) { uint8_t *o = A->object_at(i); if (!o) continue; A->obj_name(A->obj_class(o), cn, sizeof cn); if (strcmp(cn, "InputAction") != 0) continue; A->obj_name(o, nm, sizeof nm); if (!strcmp(nm, tok[1])) act = o; }
+        if (!act) { P("input action %s not found", tok[1]); return; }
+        int oc = A->find_prop_offset(A->obj_class(A->hero), "Controller"); uint8_t *ctl = NULL; if (oc >= 0) A->read_mem(A->hero + oc, &ctl, 8);
+        uint8_t *scls = A->find_object("Class", "EnhancedInputLocalPlayerSubsystem", NULL), *lib = A->find_object(NULL, "Default__SubsystemBlueprintLibrary", NULL), *sub = NULL;
+        if (!ctl || !scls || !lib) { P("no controller / subsystem class / library"); return; }
+        { const char *n2[2] = { "ContextObject", "Class" }; const void *v2[2] = { &ctl, &scls }; int s2[2] = { 8, 8 }; A->call_fn(lib, "SubsystemBlueprintLibrary", "GetLocalPlayerSubsystem", 2, n2, v2, s2, &sub, 8); }
+        if (!sub) { P("no Enhanced Input subsystem"); return; }
+        double raw[4] = { nt > 2 ? atof(tok[2]) : 1.0, 0, 0, 0 }; uint8_t empty[16] = { 0 };
+        const char *n3[4] = { "Action", "RawValue", "Modifiers", "Triggers" }; const void *v3[4] = { &act, raw, empty, empty }; int s3[4] = { 8, 32, 16, 16 };
+        P("inject %s ran: %d", tok[1], A->call_fn(sub, "EnhancedInputSubsystemInterface", "InjectInputForAction", 4, n3, v3, s3, NULL, 0)); return;
     }
     if (!strcmp(c, "npcs")) {                                           /* characters in the world with their class chain and distance to the hero */
         double rad = nt > 1 ? atof(tok[1]) : 3000, hp[3] = {0,0,0}; int max = nt > 2 ? atoi(tok[2]) : 20, shown = 0, total = 0;
