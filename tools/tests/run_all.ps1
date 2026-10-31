@@ -51,6 +51,31 @@ if ($n) {
     Check "knock-out: the lying NPC is at the same place in both copies" ($LASTEXITCODE -eq 0) ($diff2 | Select-Object -Last 1)
 }
 
+# ---- 2b. ownership: the guest hero goes to the NPC while the host hero is far away: the guest takes the NPC over and knocks it out, the host mirrors it ----
+$mark2 = (LogLines | Measure-Object).Count
+$sc = ([regex]::Match((Probe 0 "npcs 20000 40"), "([0-9A-F]{16}) Character_[^ ]*$Npc")).Groups[1].Value     # the host hero stays in the same area (same streaming cells), just clearly farther away
+$gn = ([regex]::Match((Probe 1 "npcs 20000 40"), "([0-9A-F]{16}) Character_[^ ]*$Npc")).Groups[1].Value
+if ($sc -and $gn) {
+    Probe 0 "tpto hero 0x$sc 1300 0 10" | Out-Null; Start-Sleep 1                                     # the host hero far from the NPC
+    Probe 1 "tpto hero 0x$gn 170 0 10" | Out-Null; Start-Sleep 1; Probe 1 "lookat 0x$gn 0 -20" | Out-Null
+    Start-Sleep 5
+    $own = LogLines | Select-Object -Skip $mark2
+    Check "ownership: the guest takes the NPC over when its hero is clearly nearer" ([bool]($own | Select-String "^\[$gp\] N owner of [0-9a-f]+ -> seat 1")) ""
+    Focus 1; Probe 1 "npchp 0x$gn 6" | Out-Null
+    Probe 1 "inject IA_Ability_Action_EquipWeaponAuto" | Out-Null; Start-Sleep 3
+    $down2 = $false
+    for ($i = 0; $i -lt 16 -and -not $down2; $i++) {
+        Probe 1 "lookat 0x$gn 0 -20" | Out-Null; Probe 1 "inject $($acts[$i % 4])" | Out-Null; Start-Sleep -Milliseconds 800
+        $down2 = (Probe 1 "npcinfo $Npc") -match "defeated 1"
+    }
+    Check "ownership: the guest's own hits knock the NPC out (it simulates it)" $down2 "after $i attacks"
+    Start-Sleep 4
+    $own = LogLines | Select-Object -Skip $mark2
+    Check "ownership: the host mirrors the NPC with the bone-driven mesh" ([bool]($own | Select-String "^\[$hp\] N guest: NPC .* now bone-driven")) ""
+    $diff3 = & (Join-Path $c "tools\diff_npcs.ps1") -Quiet -MaxDist 300 -Name $Npc
+    Check "ownership: the NPC is at the same place in both copies" ($LASTEXITCODE -eq 0) ($diff3 | Select-Object -Last 1)
+} else { Check "ownership: NPCs found for the scenario" $false "scavenger '$sc', $Npc in guest '$gn'" }
+
 # ---- 3. world reloads with the NPC down ----
 if (-not $Quick) {
     Focus 1; Probe 1 "inject IA_QuickSave" | Out-Null; Start-Sleep 5

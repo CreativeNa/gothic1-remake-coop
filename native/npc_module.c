@@ -37,6 +37,7 @@ static struct {
     Mirror m[MAXN]; int nm; int last_seq;
     int role, off; int off_vel; unsigned long t_prev;
     int n_sent, n_applied, n_missing; uint8_t *last_hero; unsigned long t_hero;
+    struct { uint32_t id; int8_t owner; } own[512]; int nown; int seat; unsigned long last_own;
     HPose hp[NFOCUS]; uint8_t *focus[NFOCUS]; int nfocus; unsigned long last_focus; int rr, n_posed;
 } N;
 
@@ -192,6 +193,19 @@ static int read_pose(CoreAPI *a, uint8_t *actor, uint8_t *out, int *nb_out, int1
     }
     *nb_out = h->nb; return 1;
 }
+/* ---- ownership: the copy whose hero is nearer to an NPC simulates it (AI, hits, health); the other copy mirrors it.
+ * Everything starts with seat 0. A copy takes an NPC over when its hero is clearly nearer (HYST), and gives it up when it sees the other copy's claim for it. ---- */
+#define HYST 600.0
+static int own_get(uint32_t id) { for (int i = 0; i < N.nown; i++) if (N.own[i].id == id) return N.own[i].owner; return 0; }
+static void own_set(CoreAPI *a, uint32_t id, int owner, const char *why)
+{
+    for (int i = 0; i < N.nown; i++) if (N.own[i].id == id) { if (N.own[i].owner != owner) { N.own[i].owner = (int8_t)owner; a->log("N owner of %08x -> seat %d (%s)", id, owner, why); } return; }
+    if (owner == 0) return;                                                 /* the default needs no entry */
+    if (N.nown < 512) { N.own[N.nown].id = id; N.own[N.nown].owner = (int8_t)owner; N.nown++; a->log("N owner of %08x -> seat %d (%s)", id, owner, why); }
+}
+static double dist3(const double *a, const double *b) { return sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])); }
+
+
 /* the characters closest to either player (a few at most): they are bone-driven on the guest */
 static void pick_focus(CoreAPI *a, const double *c1, int have2, const double *c2)
 {
@@ -202,6 +216,7 @@ static void pick_focus(CoreAPI *a, const double *c1, int have2, const double *c2
         double d1 = sqrt((p[0] - c1[0]) * (p[0] - c1[0]) + (p[1] - c1[1]) * (p[1] - c1[1]) + (p[2] - c1[2]) * (p[2] - c1[2]));
         double d2 = have2 ? sqrt((p[0] - c2[0]) * (p[0] - c2[0]) + (p[1] - c2[1]) * (p[1] - c2[1]) + (p[2] - c2[2]) * (p[2] - c2[2])) : 1e18;
         double d = d1 < d2 ? d1 : d2; if (d > FOCUS_R) continue;
+        if (own_get(N.known[i].id) != N.seat) continue;                          /* the other copy simulates this one and sends its bones */
         {   /* bone-driven copying only for NPCs that are defeated (lying, knocked out): a clip cannot show that pose. Everyone else keeps the normal mesh and animation: the bone-driven mesh of an NPC
              * that is sitting, standing or walking showed stretched arms and heads once a player came close. */
             uint8_t df = 0; a->call_fn(o, "GothicCharacter", "IsDefeated", 0, NULL, NULL, NULL, &df, 1);
@@ -221,6 +236,18 @@ static void host_tick(CoreAPI *a, unsigned long now)
     N.last_send = now;
     double c1[3], c2[3]; int have2 = a->puppet && loc_of(a, a->puppet, c2);
     if (!loc_of(a, a->hero, c1)) return;
+    if (now - N.last_own > 500) {                                            /* take over the NPCs my hero is clearly nearer to */
+        N.last_own = now;
+        for (int i = 0; i < N.nknown && have2; i++) {
+            uint8_t *o = N.known[i].actor; if (!a->obj_alive(o, NULL)) continue;
+            double p[3]; if (!loc_of(a, o, p)) continue;
+            double dm = dist3(p, c1), dother = dist3(p, c2);
+            if (own_get(N.known[i].id) != N.seat && dm < RADIUS && dm + HYST < dother) {
+                own_set(a, N.known[i].id, N.seat, "my hero is nearer");
+                for (int k = 0; k < N.nm; k++) if (N.m[k].id == N.known[i].id && N.m[k].frozen) release(a, &N.m[k]);
+            }
+        }
+    }
     if (now - N.last_focus > 500) { N.last_focus = now; pick_focus(a, c1, have2, c2); }
     static uint8_t buf[9000]; int cnt = 0, nstr = 0, strpos = 0;
     static char strs[40][320]; static char strtab[6000];
@@ -231,6 +258,7 @@ static void host_tick(CoreAPI *a, unsigned long now)
         double d1 = sqrt((p[0] - c1[0]) * (p[0] - c1[0]) + (p[1] - c1[1]) * (p[1] - c1[1]) + (p[2] - c1[2]) * (p[2] - c1[2]));
         double d2 = have2 ? sqrt((p[0] - c2[0]) * (p[0] - c2[0]) + (p[1] - c2[1]) * (p[1] - c2[1]) + (p[2] - c2[2]) * (p[2] - c2[2])) : 1e18;
         if (d1 > RADIUS && d2 > RADIUS) continue;
+        if (own_get(N.known[i].id) != N.seat) continue;                           /* only the NPCs this copy simulates */
         Rec r; memset(&r, 0, sizeof r);
         r.id = N.known[i].id; r.x = (float)p[0]; r.y = (float)p[1]; r.z = (float)p[2];
         r.yaw = (int16_t)(yaw_of(a, o) * 182.04); r.speed = (uint16_t)speed_of(a, o);
@@ -566,6 +594,7 @@ static void release(CoreAPI *a, Mirror *m)
 
 static void guest_tick(CoreAPI *a, unsigned long now)
 {
+    double c1[3] = { 0 }, c2[3] = { 0 }; int have1 = a->hero && loc_of(a, a->hero, c1), have2 = a->puppet && loc_of(a, a->puppet, c2);
     if (a->remote_blob2_seq != N.last_seq && a->remote_blob2_len >= 5) {          /* a new list from the host */
         N.last_seq = a->remote_blob2_seq;
         const uint8_t *B = a->remote_blob2; int len = a->remote_blob2_len;
@@ -575,6 +604,11 @@ static void guest_tick(CoreAPI *a, unsigned long now)
         N.n_missing = 0;
         for (int k = 0; k < cnt; k++) {
             Rec r; memcpy(&r, B + 5 + k * sizeof(Rec), sizeof r);
+            {   /* the other copy claims this NPC: accept unless my hero is clearly nearer to it (then my own simulation stays authoritative) */
+                double rp[3] = { r.x, r.y, r.z };
+                if (own_get(r.id) == N.seat && have1 && have2 && dist3(rp, c1) + HYST < dist3(rp, c2)) continue;
+                if (own_get(r.id) == N.seat) own_set(a, r.id, 1 - N.seat, "the other copy claims it");
+            }
             Mirror *m = mirror_for(a, r.id); if (!m) { N.n_missing++; continue; }
             m->want = r; m->last_seen = now;
             if (!m->frozen) freeze(a, m);
@@ -587,7 +621,7 @@ static void guest_tick(CoreAPI *a, unsigned long now)
                 uint32_t pid; memcpy(&pid, B + po + 1, 4); int nb = B[po + 5] | (B[po + 6] << 8);
                 int nsp = 0; if (nb > 0 && nb <= MAXB && po + 7 + nb * 12 + 2 <= len) nsp = B[po + 7 + nb * 12] | (B[po + 8 + nb * 12] << 8);
                 if (nb > 0 && nb <= MAXB && nsp >= 0 && nsp <= 160 && po + 9 + nb * 12 + nsp * 8 <= len) {
-                    Mirror *m = mirror_for(a, pid);
+                    Mirror *m = own_get(pid) == N.seat ? NULL : mirror_for(a, pid);
                     if (m) {
                         if (!m->gp) m->gp = (GPose *)calloc(1, sizeof(GPose));
                         if (m->gp) {
@@ -608,6 +642,7 @@ static void guest_tick(CoreAPI *a, unsigned long now)
     for (int i = 0; i < N.nm; i++) {
         Mirror *m = &N.m[i];
         if (!m->actor || !a->obj_alive(m->actor, NULL)) { m->frozen = 0; continue; }
+        if (own_get(m->id) == N.seat) { if (m->frozen) release(a, m); continue; }     /* simulated here */
         if (!m->frozen) continue;
         if (m->gp) {
             if (now - m->gp->t > 5000) { gp_drop(a, m); set_anim(a, m); }          /* no longer one of the host's focus NPCs: the original mesh and its animation come back */
@@ -660,10 +695,11 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     }
     if (N.off || !a->have_remote || !a->hero) return;
     if (N.scanning || !N.last_scan || now - N.last_scan > 4000) rescan_slice(a);
-    if (N.role == 1) host_tick(a, now); else guest_tick(a, now);
+    N.seat = N.role == 1 ? 0 : 1;
+    host_tick(a, now); guest_tick(a, now);                                    /* send what this copy simulates, mirror what the other one simulates */
     if (now - N.last_stat > 5000) {
         N.last_stat = now;
-        a->log("N %s: %d characters known, %s %d, missing %d, %s %d", N.role == 1 ? "host" : "guest", N.nknown, N.role == 1 ? "sent" : "mirrored", N.role == 1 ? N.n_sent : N.n_applied, N.n_missing, N.role == 1 ? "focus" : "poses applied", N.role == 1 ? N.nfocus : N.n_posed);
+        a->log("N seat %d: %d characters known, simulating %d, mirroring %d, missing %d, bone-driven here %d, bone-driven mirrors applied %d", N.seat, N.nknown, N.n_sent, N.n_applied, N.n_missing, N.nfocus, N.n_posed);
     }
 }
 

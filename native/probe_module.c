@@ -363,6 +363,26 @@ static void run_command(char *line)
         if (!shown) P("NPCINFO none matching %s", tok[1]);
         return;
     }
+    if (!strcmp(c, "gedamage") && nt >= 3) {                              /* gedamage <npc ptr> <GameplayEffect class name> [level]: the hero's ability system applies that effect to the NPC's (what a weapon hit does) */
+        uint8_t *npc = ptr_of(tok[1]); if (!live(npc) || !A->hero) { P("not live objects"); return; }
+        char cdoname[200]; snprintf(cdoname, sizeof cdoname, "Default__%s", tok[2]);
+        uint8_t *cdo = A->find_object(NULL, cdoname, NULL); uint8_t *ge = cdo ? A->obj_class(cdo) : A->find_object("Class", tok[2], NULL);
+        if (!ge) { P("effect class %s not found", tok[2]); return; }
+        uint8_t *owners[2][2] = { { A->hero, NULL }, { npc, NULL } }; uint8_t *asc[2] = { NULL, NULL }; char cn[96];
+        for (int w = 0; w < 2; w++) { int ops = A->find_prop_offset(A->obj_class(owners[w][0]), "PlayerState"); if (ops >= 0) A->read_mem(owners[w][0] + ops, &owners[w][1], 8); }
+        int n = A->num_objects();
+        for (int i = 0; i < n; i++) {
+            uint8_t *o = A->object_at(i); if (!o) continue; A->obj_name(A->obj_class(o), cn, sizeof cn); if (!strstr(cn, "AbilitySystemComponent")) continue;
+            uint8_t *ou = NULL; A->read_mem(o + 0x20, &ou, 8); if (!ou) continue;
+            for (int w = 0; w < 2; w++) if (ou == owners[w][0] || (owners[w][1] && ou == owners[w][1])) asc[w] = o;
+        }
+        P("hero ability system %p, npc ability system %p, effect %p", asc[0], asc[1], ge);
+        if (!asc[0] || !asc[1]) return;
+        float lvl = nt > 3 ? (float)atof(tok[3]) : 1.0f; uint8_t ctx[24] = { 0 }; uint8_t ret[8] = { 0 };
+        const char *nn[4] = { "GameplayEffectClass", "Target", "Level", "Context" }; const void *vv[4] = { &ge, &asc[1], &lvl, ctx }; int ss[4] = { 8, 8, 4, 24 };
+        int ok = A->call_fn(asc[0], "AbilitySystemComponent", "BP_ApplyGameplayEffectToTarget", 4, nn, vv, ss, ret, 8);
+        P("gedamage ran: %d, handle %02x%02x%02x%02x", ok, ret[0], ret[1], ret[2], ret[3]); return;
+    }
     if (!strcmp(c, "npcs")) {                                           /* characters in the world with their class chain and distance to the hero */
         double rad = nt > 1 ? atof(tok[1]) : 3000, hp[3] = {0,0,0}; int max = nt > 2 ? atoi(tok[2]) : 20, shown = 0, total = 0;
         if (A->hero) A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hp, 24);
