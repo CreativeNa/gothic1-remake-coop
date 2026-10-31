@@ -52,3 +52,8 @@ Last updated: 2026-10-30
   Live quest changes go through the game's own `StartQuest` / `SucceedQuest` / `MakeQuestAvailable` (journal, rewards of the local hero), the first bulk sync and other states are written directly.
   Quest states: 0 none, 1 available, 2 running, 3 failed, 4 succeeded.
 - Test: `tools	ests	est_story.ps1` (6 checks, both directions). Not yet verified visually: journal entries / notifications on the guest, dialogues in progress, rewards given twice.
+
+### Not checked yet (postponed by the user, 2026-10-31)
+- Story/quests, by eye in the game: a journal entry and a notification appear on the guest when the host starts a quest; both heroes get the reward (and only once); a dialogue in progress on one copy.
+- Fuzz test with the NPC module off, to see whether the fmod crash (+0x5be3977) is the game's own.
+- Real two-PC test over IP, arrows in flight, friend archive.
