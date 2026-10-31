@@ -64,7 +64,8 @@ if ($sc -and $gn) {
     Focus 1; Probe 1 "npchp 0x$gn 6" | Out-Null
     Probe 1 "inject IA_Ability_Action_EquipWeaponAuto" | Out-Null; Start-Sleep 3
     $down2 = $false
-    for ($i = 0; $i -lt 16 -and -not $down2; $i++) {
+    for ($i = 0; $i -lt 28 -and -not $down2; $i++) {
+        if ($i -eq 12) { Focus 1; Probe 1 "inject IA_Ability_Action_EquipWeaponAuto" | Out-Null; Start-Sleep 2 }     # still not down: the weapon may have been put away, draw it again
         Probe 1 "lookat 0x$gn 0 -20" | Out-Null; Probe 1 "inject $($acts[$i % 4])" | Out-Null; Start-Sleep -Milliseconds 800
         $down2 = (Probe 1 "npcinfo $Npc") -match "defeated 1"
     }
@@ -74,6 +75,11 @@ if ($sc -and $gn) {
     Check "ownership: the host mirrors the NPC with the bone-driven mesh" ([bool]($own | Select-String "^\[$hp\] N guest: NPC .* now bone-driven")) ""
     $diff3 = & (Join-Path $c "tools\diff_npcs.ps1") -Quiet -MaxDist 300 -Name $Npc
     Check "ownership: the NPC is at the same place in both copies" ($LASTEXITCODE -eq 0) ($diff3 | Select-Object -Last 1)
+    foreach ($hv in 77, 0) {                                                                       # the owner's health numbers (and a death) arrive on the mirror
+        Probe 1 "npchp 0x$gn $hv" | Out-Null; Start-Sleep 3
+        $hh = [regex]::Match((Probe 0 "npcinfo $Npc"), "health (-?\d+)").Groups[1].Value
+        Check "health: the mirror shows the owner's health $hv" ($hh -ne "" -and [math]::Abs([int]$hh - $hv) -le 2) "mirror shows '$hh'"
+    }
 } else { Check "ownership: NPCs found for the scenario" $false "scavenger '$sc', $Npc in guest '$gn'" }
 
 # ---- 3. world reloads with the NPC down ----

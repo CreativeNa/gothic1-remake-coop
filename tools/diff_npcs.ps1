@@ -18,7 +18,7 @@ $out = foreach ($a in $h) {
     $b = $g | Where-Object { $_.Name -eq $a.Name } | Select-Object -First 1
     if (-not $b) { [pscustomobject]@{ Name = $a.Name; Dist = $null; HostDefeated = $a.Defeated; GuestDefeated = $null; HostHp = $a.Health; GuestHp = $null; Verdict = "MISSING in guest" }; continue }
     $d = [math]::Sqrt([math]::Pow($a.X - $b.X, 2) + [math]::Pow($a.Y - $b.Y, 2) + [math]::Pow($a.Z - $b.Z, 2))
-    $v = if ($d -gt $MaxDist) { "POSITION off by $([int]$d)" } else { "ok" }
+    $v = if ($d -gt $MaxDist) { "POSITION off by $([int]$d)" } elseif ($a.Health -ge 0 -and $b.Health -ge 0 -and [math]::Abs($a.Health - $b.Health) -gt 8) { "HEALTH differs ($($a.Health) vs $($b.Health))" } else { "ok" }
     [pscustomobject]@{ Name = $a.Name -replace '^Character_', ''; Dist = [int]$d; HostDefeated = $a.Defeated; GuestDefeated = $b.Defeated; HostHp = $a.Health; GuestHp = $b.Health; Verdict = $v }
 }
 if (-not $Quiet) { $out | Format-Table -AutoSize | Out-String | Write-Host }

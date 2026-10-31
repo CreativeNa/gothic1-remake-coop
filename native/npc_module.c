@@ -29,7 +29,7 @@ typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1
 typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int16_t sc[MAXB][3]; unsigned shash; int have, dirty, pending, napplied, checked, nparent; int16_t parent[MAXB]; unsigned long t, topt, titems; uint8_t orig_col; } GPose;   /* guest: bone-driven copy of one NPC */
 typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; uint8_t last[MAXB * 12]; unsigned long next_t; int interval; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
 typedef struct { uint8_t *actor; uint32_t id; } Known;
-typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
+typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen, t_hp, t_wp; struct { uint8_t *item; char holster[64]; } wp[4]; int nwp; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
 
 static struct {
     Known known[2048]; int nknown; unsigned long last_scan, last_send, last_stat;
@@ -38,6 +38,7 @@ static struct {
     int role, off; int off_vel; unsigned long t_prev;
     int n_sent, n_applied, n_missing; uint8_t *last_hero; unsigned long t_hero;
     struct { uint32_t id; int8_t owner; } own[512]; int nown; int seat; unsigned long last_own;
+    struct { uint8_t *outer, *set; } hs[600], hs_tmp[600]; int nhs, nhs_tmp;        /* AttributeSet_Health objects by their owner (an NPC's PlayerState) */
     HPose hp[NFOCUS]; uint8_t *focus[NFOCUS]; int nfocus; unsigned long last_focus; int rr, n_posed;
 } N;
 
@@ -59,6 +60,7 @@ static uint8_t *ptr_prop(CoreAPI *a, uint8_t *obj, const char *name)
 static int class_chain_has_agent(CoreAPI *a, uint8_t *cls)
 {
     char nm[96]; uint8_t *c = cls;
+    a->obj_name(cls, nm, sizeof nm); if (strcmp(nm, "AttributeSet_Health") == 0) return 2;
     for (int d = 0; c && d < 14; d++) {
         a->obj_name(c, nm, sizeof nm);
         if (strcmp(nm, "AIAgentCharacter") == 0) return 1;
@@ -83,17 +85,19 @@ static void rescan_slice(CoreAPI *a)
 {
     char nm[200];
     int n = a->num_objects();
-    if (!N.scanning) { N.scanning = 1; N.scan_pos = 0; N.ntmp = 0; }
+    if (!N.scanning) { N.scanning = 1; N.scan_pos = 0; N.ntmp = 0; N.nhs_tmp = 0; }
     int end = N.scan_pos + 25000; if (end > n) end = n;
     for (int i = N.scan_pos; i < end && N.ntmp < 2048; i++) {
         uint8_t *o = a->object_at(i); if (!o) continue;
-        uint8_t *cls = a->obj_class(o); if (!cls || !is_character_class(a, cls)) continue;
+        uint8_t *cls = a->obj_class(o); if (!cls) continue;
+        int kind = is_character_class(a, cls); if (!kind) continue;
+        if (kind == 2) { uint8_t *ou = NULL; a->read_mem(o + 0x20, &ou, 8); if (ou && N.nhs_tmp < 600) { N.hs_tmp[N.nhs_tmp].outer = ou; N.hs_tmp[N.nhs_tmp].set = o; N.nhs_tmp++; } continue; }
         a->obj_name(o, nm, sizeof nm); if (strncmp(nm, "Default__", 9) == 0) continue;
         if (a->read_bool(o, "bActorIsBeingDestroyed") == 1) continue;
         N.tmp[N.ntmp].actor = o; N.tmp[N.ntmp].id = fnv(nm); N.ntmp++;
     }
     N.scan_pos = end;
-    if (end >= n || N.ntmp >= 2048) { memcpy(N.known, N.tmp, (size_t)N.ntmp * sizeof(Known)); N.nknown = N.ntmp; N.scanning = 0; N.last_scan = GetTickCount(); }
+    if (end >= n || N.ntmp >= 2048) { memcpy(N.known, N.tmp, (size_t)N.ntmp * sizeof(Known)); N.nknown = N.ntmp; memcpy(N.hs, N.hs_tmp, (size_t)N.nhs_tmp * sizeof N.hs[0]); N.nhs = N.nhs_tmp; N.scanning = 0; N.last_scan = GetTickCount(); }
 }
 
 static int loc_of(CoreAPI *a, uint8_t *o, double *v) { double r[3] = { 0, 0, 0 }; if (!a->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, r, 24)) return 0; v[0] = r[0]; v[1] = r[1]; v[2] = r[2]; return 1; }
@@ -108,6 +112,17 @@ static double speed_of(CoreAPI *a, uint8_t *o)
 
 static double yaw_of(CoreAPI *a, uint8_t *o) { double r[3] = { 0, 0, 0 }; a->call_fn(o, "Actor", "K2_GetActorRotation", 0, NULL, NULL, NULL, r, 24); return r[1]; }   /* FRotator: pitch, yaw, roll */
 
+
+
+/* the NPC's health: its PlayerState owns the AttributeSet_Health (Health = BaseValue at +72, CurrentValue at +76 of the set) */
+static uint8_t *health_set(CoreAPI *a, uint8_t *actor)
+{
+    uint8_t *pst = ptr_prop(a, actor, "PlayerState"); if (!pst) return NULL;
+    for (int i = 0; i < N.nhs; i++) if (N.hs[i].outer == pst) return a->obj_alive(N.hs[i].set, NULL) ? N.hs[i].set : NULL;
+    return NULL;
+}
+static int npc_health(CoreAPI *a, uint8_t *actor) { uint8_t *hs = health_set(a, actor); if (!hs) return -1; float h = 0; a->read_mem(hs + 64 + 12, &h, 4); return (int)(h + 0.5f); }
+static void npc_set_health(CoreAPI *a, uint8_t *actor, int v) { uint8_t *hs = health_set(a, actor); if (!hs) return; float f = (float)v; a->write_mem(hs + 64 + 8, &f, 4); a->write_mem(hs + 64 + 12, &f, 4); }
 
 /* the clip of the NPC's active montage: name and package path, like the hero's action */
 static int clip_of(CoreAPI *a, uint8_t *o, char *name, int ncap, char *pkg, int pcap)
@@ -220,7 +235,8 @@ static void pick_focus(CoreAPI *a, const double *c1, int have2, const double *c2
         {   /* bone-driven copying only for NPCs that are defeated (lying, knocked out): a clip cannot show that pose. Everyone else keeps the normal mesh and animation: the bone-driven mesh of an NPC
              * that is sitting, standing or walking showed stretched arms and heads once a player came close. */
             uint8_t df = 0; a->call_fn(o, "GothicCharacter", "IsDefeated", 0, NULL, NULL, NULL, &df, 1);
-            if (!df) continue;
+            uint8_t dd = 0; a->call_fn(o, "GothicCharacter", "IsDead", 0, NULL, NULL, NULL, &dd, 1);
+            if (!df && !dd) continue;
         }
         int pos = N.nfocus; while (pos > 0 && best[pos - 1] > d) pos--;
         if (pos >= NFOCUS) continue;
@@ -262,6 +278,12 @@ static void host_tick(CoreAPI *a, unsigned long now)
         Rec r; memset(&r, 0, sizeof r);
         r.id = N.known[i].id; r.x = (float)p[0]; r.y = (float)p[1]; r.z = (float)p[2];
         r.yaw = (int16_t)(yaw_of(a, o) * 182.04); r.speed = (uint16_t)speed_of(a, o);
+        {   uint8_t df = 0, dd = 0; int hp = npc_health(a, o);
+            a->call_fn(o, "GothicCharacter", "IsDefeated", 0, NULL, NULL, NULL, &df, 1); a->call_fn(o, "GothicCharacter", "IsDead", 0, NULL, NULL, NULL, &dd, 1);
+            { uint8_t *carry = ptr_prop(a, o, "m_CarryComponent"), *eq = ptr_prop(a, carry, "m_EquippedItem"); char ec[96] = "";
+              if (eq) a->obj_name(a->obj_class(eq), ec, sizeof ec);
+              if (strstr(ec, "ItMw")) r.flags |= 4; else if (strstr(ec, "ItRw")) r.flags |= 8; }
+            r.flags |= (uint8_t)((df & 1) | ((dd & 1) << 1)); r.pad = (uint8_t)(hp < 0 ? 255 : (hp > 254 ? 254 : hp)); }
         char cn[120], cp[200];
         if (clip_of(a, o, cn, sizeof cn, cp, sizeof cp)) {
             { static char lastc[8][120]; static int nl; int seen = 0; for (int q = 0; q < nl; q++) if (!strcmp(lastc[q], cn)) seen = 1; if (!seen && nl < 8) { snprintf(lastc[nl++], 120, "%s", cn); a->log("N host: NPC clip %s (%s)", cn, cp); } }
@@ -592,6 +614,40 @@ static void release(CoreAPI *a, Mirror *m)
     if (m->anim[0] && m->actor && a->obj_alive(m->actor, NULL)) { m->anim[0] = 0; set_anim(a, m); }
 }
 
+
+
+/* The mirror's AI decides on its own where the NPC carries its weapon: put the melee weapon / bow into the hand or back into its holster as the owner has it.
+ * The holster socket is remembered the first time an item is seen without the owner having it in hand. */
+static void sync_weapon_sockets(CoreAPI *a, Mirror *m, unsigned long now)
+{
+    if (now - m->t_wp < 700) return; m->t_wp = now;
+    uint8_t *mesh = ptr_prop(a, m->actor, "Mesh"); if (!mesh) return;
+    uint8_t *parent = (m->gp && m->gp->comp && a->obj_alive(m->gp->comp, NULL)) ? m->gp->comp : mesh;
+    int oat = a->find_prop_offset(a->obj_class(parent), "AttachChildren"); if (oat < 0) return;
+    uint8_t *kids = NULL; int nk = 0; a->read_mem(parent + oat, &kids, 8); a->read_mem(parent + oat + 8, &nk, 4);
+    if (!kids || nk <= 0 || nk > 100) return;
+    uint8_t *list[100]; int n = 0; for (int i = 0; i < nk; i++) { uint8_t *c = NULL; a->read_mem(kids + (size_t)i * 8, &c, 8); if (c) list[n++] = c; }
+    for (int i = 0; i < n; i++) {
+        uint8_t *comp = list[i], *o = NULL; a->read_mem(comp + 0x20, &o, 8);
+        if (!o || o == m->actor || !a->obj_alive(o, NULL) || ptr_prop(a, o, "RootComponent") != comp) continue;
+        char cn[120] = ""; a->obj_name(a->obj_class(o), cn, sizeof cn);
+        int melee = strstr(cn, "ItMw") != NULL, bow = strstr(cn, "ItRw") != NULL && strstr(cn, "Quiver") == NULL; if (!melee && !bow) continue;
+        int os = a->find_prop_offset(a->obj_class(comp), "AttachSocketName"); char cur[96] = "None"; if (os >= 0) a->fname_to_str(comp + os, cur, sizeof cur);
+        int slot = -1; for (int k = 0; k < m->nwp; k++) if (m->wp[k].item == o) slot = k;
+        int inhand = (m->want.flags & (melee ? 4 : 8)) != 0;
+        const char *hand = melee ? "weapon_r" : "weapon_l";
+        if (slot < 0 && m->nwp < 4) { slot = m->nwp++; m->wp[slot].item = o; m->wp[slot].holster[0] = 0; }
+        if (slot < 0) continue;
+        if (strcmp(cur, hand) != 0 && !m->wp[slot].holster[0]) snprintf(m->wp[slot].holster, sizeof m->wp[slot].holster, "%s", cur);   /* first sight: this is the holster */
+        const char *want = inhand ? hand : (m->wp[slot].holster[0] ? m->wp[slot].holster : NULL);
+        if (!want || strcmp(cur, want) == 0) continue;
+        uint8_t snap = 2, weld = 0; uint8_t *par = parent;
+        const char *n3[6] = { "Parent", "SocketName", "LocationRule", "RotationRule", "ScaleRule", "bWeldSimulatedBodies" };
+        const void *v3[6] = { &par, want, &snap, &snap, &snap, &weld }; int s3[6] = { 8, -1, 1, 1, 1, 1 };
+        a->call_fn(comp, "SceneComponent", "K2_AttachToComponent", 6, n3, v3, s3, NULL, 0);
+        a->log("N mirror: %s of NPC %p %s -> %s", cn, m->actor, cur, want);
+    }
+}
 static void guest_tick(CoreAPI *a, unsigned long now)
 {
     double c1[3] = { 0 }, c2[3] = { 0 }; int have1 = a->hero && loc_of(a, a->hero, c1), have2 = a->puppet && loc_of(a, a->puppet, c2);
@@ -649,6 +705,11 @@ static void guest_tick(CoreAPI *a, unsigned long now)
             else { if (now - m->gp->topt > 3000) { m->gp->topt = now; tickopt_off(a, m->actor); } gp_apply(a, m); }
         }
         if (now - m->last_seen > 5000) { release(a, m); continue; }              /* the host no longer reports it (far away): give the AI back */
+        if (m->want.pad != 255 && now - m->t_hp > 400) {                           /* the owner's health numbers (and a death) on the mirror */
+            m->t_hp = now; int mine = npc_health(a, m->actor);
+            if (mine >= 0 && mine != m->want.pad) npc_set_health(a, m->actor, m->want.pad);
+        }
+        sync_weapon_sockets(a, m, now);
         double want[3] = { m->want.x, m->want.y, m->want.z };
         if (!m->have_cur) { memcpy(m->cur, want, sizeof want); m->have_cur = 1; }
         double dx = want[0] - m->cur[0], dy = want[1] - m->cur[1], dz = want[2] - m->cur[2], dist = sqrt(dx * dx + dy * dy + dz * dz);
