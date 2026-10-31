@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define COREAPI_VERSION 10
+#define COREAPI_VERSION 11
 
 typedef struct CoreAPI {
     int version;
@@ -91,6 +91,11 @@ typedef struct CoreAPI {
     /* v10: third channel (story flags, quest states); a blob set here is sent once */
     void (*set_local_blob3)(const void *data, int len);
     const uint8_t *remote_blob3; int remote_blob3_len; int remote_blob3_seq;
+
+    /* v11: function observer. observe_fn swaps the native body of a UFunction for a recorder (returns a slot, -1 if the function has no body of its own);
+     * obs_pop takes the oldest recorded call: slot, the object it was called on, the parameter buffer (only if the call came through ProcessEvent: had_locals) */
+    int (*observe_fn)(const char *outer, const char *fn);
+    int (*obs_pop)(int *slot, uint8_t **obj, uint8_t *params, int cap, int *plen, int *had_locals);
 } CoreAPI;
 
 /* exports of a module */

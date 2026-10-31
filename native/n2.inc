@@ -391,7 +391,7 @@ static struct ModSlot {
     FILETIME mtime; int serial; int need_init; char loaded_path[MAX_PATH];
     double cost_sum, cost_max; int cost_n;      /* mod_update cost in ms since the last log line */
     int always;                 /* 1: called every engine tick (menu, loading screens, no friend needed); 0: only while the puppet exists */
-} g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "npc" }, { .name = "story" }, { .name = "probe", .always = 1 } };
+} g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "npc" }, { .name = "story", .always = 1 }, { .name = "probe", .always = 1 } };
 static int g_nmods = 6;
 
 static double seq_length_w(uint8_t *seq)
@@ -673,6 +673,65 @@ static int ring_feed(BlobRing *r, const uint8_t *rx, int n, uint8_t *out, int *o
     r->last_seq = seq; r->have_last = 1; memcpy(out, a->data, (size_t)len); *outlen = len; return 1;
 }
 
+
+/* ================= function observer (v11): see calls of chosen UFunctions without patching any code =================
+ * The native body of a UFunction is a pointer in the UFunction object (Func, found like the probe's nativefn does). It is swapped for a small thunk that
+ * records the call (object + the parameter buffer when the call came through ProcessEvent: FFrame::Locals) and then calls the original body.
+ * Only functions that have a native body of their own can be observed (same body address for many functions = script / blueprint thunk: refused). */
+typedef void (*NativeFn_t)(uint8_t *ctx, uint8_t *frame, void *result);
+#define OBS_MAX 24
+#define OBS_PARM 192
+static struct { uint8_t *ufn; NativeFn_t orig; int parms; char name[96]; } g_obs[OBS_MAX]; static int g_nobs; static int g_obs_foff = -1;
+static struct { int slot; uint8_t *obj; int len; int had_locals; uint8_t data[OBS_PARM]; } g_obsq[64]; static int g_obs_head, g_obs_tail;
+static void obs_record(int i, uint8_t *ctx, uint8_t *fr)
+{
+    __try {
+        int n = (g_obs_head + 1) & 63; if (n == g_obs_tail) return;                              /* queue full: drop */
+        uint8_t *code = *(uint8_t **)(fr + 32), *locals = *(uint8_t **)(fr + 40);
+        g_obsq[g_obs_head].slot = i; g_obsq[g_obs_head].obj = ctx; g_obsq[g_obs_head].len = 0; g_obsq[g_obs_head].had_locals = 0;
+        if (!code && locals && g_obs[i].parms > 0 && g_obs[i].parms <= OBS_PARM) { memcpy(g_obsq[g_obs_head].data, locals, (size_t)g_obs[i].parms); g_obsq[g_obs_head].len = g_obs[i].parms; g_obsq[g_obs_head].had_locals = 1; }
+        g_obs_head = n;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+#define OBS_THUNK(i) static void obs_thunk_##i(uint8_t *ctx, uint8_t *fr, void *res) { obs_record(i, ctx, fr); g_obs[i].orig(ctx, fr, res); }
+OBS_THUNK(0) OBS_THUNK(1) OBS_THUNK(2) OBS_THUNK(3) OBS_THUNK(4) OBS_THUNK(5) OBS_THUNK(6) OBS_THUNK(7)
+OBS_THUNK(8) OBS_THUNK(9) OBS_THUNK(10) OBS_THUNK(11) OBS_THUNK(12) OBS_THUNK(13) OBS_THUNK(14) OBS_THUNK(15)
+OBS_THUNK(16) OBS_THUNK(17) OBS_THUNK(18) OBS_THUNK(19) OBS_THUNK(20) OBS_THUNK(21) OBS_THUNK(22) OBS_THUNK(23)
+static NativeFn_t g_obs_thunks[OBS_MAX] = { obs_thunk_0, obs_thunk_1, obs_thunk_2, obs_thunk_3, obs_thunk_4, obs_thunk_5, obs_thunk_6, obs_thunk_7, obs_thunk_8, obs_thunk_9, obs_thunk_10, obs_thunk_11,
+    obs_thunk_12, obs_thunk_13, obs_thunk_14, obs_thunk_15, obs_thunk_16, obs_thunk_17, obs_thunk_18, obs_thunk_19, obs_thunk_20, obs_thunk_21, obs_thunk_22, obs_thunk_23 };
+
+static int observe_fn_w(const char *outer, const char *fn)
+{
+    char nm[96]; snprintf(nm, sizeof nm, "%s::%s", outer, fn);
+    for (int i = 0; i < g_nobs; i++) if (!strcmp(g_obs[i].name, nm)) return i;                  /* already observed */
+    if (g_nobs >= OBS_MAX) return -1;
+    uint8_t *base = (uint8_t *)GetModuleHandleA(NULL); IMAGE_NT_HEADERS *nth = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew); size_t image = nth->OptionalHeader.SizeOfImage;
+    if (g_obs_foff < 0) {
+        uint8_t *ref = find_object("Function", "K2_GetActorLocation", "Actor");
+        for (int o = 0x80; ref && o < 0x140 && g_obs_foff < 0; o += 8) { uint8_t *v = NULL; safe_read(ref + o, &v, 8); if (v >= base + 0x1000 && (size_t)(v - base) < image) g_obs_foff = o; }
+        if (g_obs_foff < 0) { logf_("OBS: UFunction::Func offset not found"); return -1; }
+        logf_("OBS: UFunction::Func at +0x%x", g_obs_foff);
+    }
+    uint8_t *f = find_object("Function", fn, outer); if (!f) { logf_("OBS: %s not found", nm); return -1; }
+    uint8_t *cur = NULL; safe_read(f + g_obs_foff, &cur, 8);
+    if (!cur || cur < base || (size_t)(cur - base) >= image) { logf_("OBS: %s has no native body in the exe", nm); return -1; }
+    for (int i = 0; i < g_nobs; i++) if ((uint8_t *)g_obs[i].orig == cur) { logf_("OBS: %s shares its body with %s (script thunk), refused", nm, g_obs[i].name); return -1; }
+    char d[400] = ""; describe_fn_w(outer, fn, d, sizeof d); int parms = 0;                       /* "Name@off/size ..." -> size of the parameter buffer */
+    for (char *p = d; (p = strchr(p, '@')) != NULL; ) { int off = 0, sz = 0; if (sscanf(p + 1, "%d/%d", &off, &sz) == 2 && off + sz > parms) parms = off + sz; p++; }
+    int i = g_nobs++; g_obs[i].ufn = f; g_obs[i].orig = (NativeFn_t)cur; g_obs[i].parms = parms; snprintf(g_obs[i].name, sizeof g_obs[i].name, "%s", nm);
+    uint8_t *thunk = (uint8_t *)g_obs_thunks[i];
+    if (!write_mem_w(f + g_obs_foff, &thunk, 8)) { g_nobs--; logf_("OBS: cannot write the Func pointer of %s", nm); return -1; }
+    logf_("OBS: observing %s (native body exe+0x%llx, parameter buffer %d bytes: %s)", nm, (unsigned long long)(cur - base), parms, d);
+    return i;
+}
+static int obs_pop_w(int *slot, uint8_t **obj, uint8_t *params, int cap, int *plen, int *had_locals)
+{
+    if (g_obs_tail == g_obs_head) return 0;
+    int i = g_obs_tail; g_obs_tail = (g_obs_tail + 1) & 63;
+    *slot = g_obsq[i].slot; *obj = g_obsq[i].obj; *had_locals = g_obsq[i].had_locals; int n = g_obsq[i].len; if (n > cap) n = cap; memcpy(params, g_obsq[i].data, (size_t)n); *plen = n;
+    return 1;
+}
+
 static void set_local_blob3_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob3) len = 0; memcpy(g_lblob3, d, (size_t)len); g_lblob3_len = len; }
 static void set_local_blob2_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob2) len = 0; memcpy(g_lblob2, d, (size_t)len); g_lblob2_len = len; }
 static void set_local_blob_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob) len = 0; memcpy(g_lblob, d, (size_t)len); g_lblob_len = len; }
@@ -746,7 +805,7 @@ static void api_init(void)
     g_api.set_attach_target = set_attach_target_w;
     g_api.remote_blob = g_rblob;
     g_api.list_members = list_members_w;
-    g_api.describe_fn = describe_fn_w;
+    g_api.describe_fn = describe_fn_w; g_api.observe_fn = observe_fn_w; g_api.obs_pop = obs_pop_w;
     g_api.write_mem = write_mem_w;
     g_api.action = "-"; g_api.action_pkg = "-";
 }

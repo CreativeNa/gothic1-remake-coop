@@ -480,6 +480,18 @@ static void run_command(char *line)
         struct MemCtx ctx = { NULL, NULL, 0, 0, nt > 2 ? atoi(tok[2]) : 60, 1 };
         A->list_members(k, member_cb, &ctx); P("%d props", ctx.props); return;
     }
+    if (!strcmp(c, "fninfo") && nt >= 3) {                               /* fninfo <Outer> <Function>: the UFunction, its flags, where its native body is (exe RVA; the same RVA for many functions = script / blueprint thunk) and its parameters */
+        uint8_t *fn = A->find_object("Function", tok[2], tok[1]); if (!fn) { P("function %s::%s not found", tok[1], tok[2]); return; }
+        uint8_t *base = (uint8_t *)GetModuleHandleA(NULL); IMAGE_NT_HEADERS *nth = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew); size_t image = nth->OptionalHeader.SizeOfImage;
+        uint8_t *ref = A->find_object("Function", "K2_GetActorLocation", "Actor"); int foff = -1;
+        for (int o = 0x80; ref && o < 0x140 && foff < 0; o += 8) { uint8_t *v = NULL; A->read_mem(ref + o, &v, 8); if (v >= base + 0x1000 && v < base + 0x6000000 && (size_t)(v - base) < image) foff = o; }
+        uint8_t *f = NULL; if (foff >= 0) A->read_mem(fn + foff, &f, 8);
+        uint32_t flags = 0; int ofl = A->find_prop_offset(A->obj_class(fn), "FunctionFlags"); (void)ofl;
+        for (int o = 0x80; o < 0xb0; o += 4) { uint32_t v = 0; A->read_mem(fn + o, &v, 4); if (v & 0x400) { flags = v; P("  flags-like dword at +0x%x = 0x%x (0x400 = native)", o, v); break; } }
+        char d[300] = ""; A->describe_fn(tok[1], tok[2], d, sizeof d);
+        P("%s::%s ufunction %p, Func at +0x%x = %p (exe+0x%llx), params: %s", tok[1], tok[2], fn, foff, f, (unsigned long long)(f ? f - base : 0), d);
+        (void)flags; return;
+    }
     if (!strcmp(c, "heroinfo")) {                                        /* heroinfo: the hero's position (to put it back after a test) */
         double l[3] = { 0 }; if (!A->hero || !A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, l, 24)) { P("HEROINFO none"); return; }
         P("HEROINFO pos %.0f %.0f %.0f", l[0], l[1], l[2]); return;

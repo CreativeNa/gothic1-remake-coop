@@ -255,6 +255,23 @@ static void check_items(CoreAPI *a, double *hp)
     for (int j = 0; j < S.nit; ) { if (!S.it[j].ptr) S.it[j] = S.it[--S.nit]; else j++; }
 }
 
+/* ---- loot observer: which container functions does the game call when a player takes items? (logged for now; see docs/CHANGELOG.md) ---- */
+static const char *OBS_FNS[] = { "Server_MoveItemTo", "Server_MoveItemFromActorToOtherActor", "Server_AddAllItemsFromContainer", "Server_GetItemsFromContainerInv", "Server_PickWorldItem", "Server_ConsumeItem", "Server_AddNewItem" };
+static int obs_ready, obs_slot[8];
+static void obs_tick(CoreAPI *a)
+{
+    if (!a->observe_fn) return;
+    if (!obs_ready) { obs_ready = 1; for (int i = 0; i < 7; i++) obs_slot[i] = a->observe_fn("DataModule_Container", OBS_FNS[i]); }
+    int slot, plen, hl; uint8_t *obj; uint8_t pb[192];
+    while (a->obs_pop(&slot, &obj, pb, sizeof pb, &plen, &hl)) {
+        const char *fn = "?"; for (int i = 0; i < 7; i++) if (obs_slot[i] == slot) fn = OBS_FNS[i];
+        char nm[100] = "?"; if (obj) a->obj_name(obj, nm, sizeof nm);
+        char hx[420] = ""; for (int k = 0; k < plen && k < 100; k++) { char t[4]; sprintf(t, "%02x", pb[k]); strcat(hx, t); if (k % 4 == 3) strcat(hx, " "); }
+        a->log("S obs %s on %s%s: %s", fn, nm, hl ? "" : " (no parameter buffer: bytecode call)", hx);
+        for (int q = 0; q + 8 <= plen; q += 8) { uint8_t *pp; memcpy(&pp, pb + q, 8); if ((uintptr_t)pp > 0x10000 && a->obj_alive(pp, NULL)) { char on[100]; a->obj_name(pp, on, sizeof on); a->log("S obs   param @%d = %s", q, on); } }
+    }
+}
+
 static void apply_remote(CoreAPI *a, const uint8_t *B, int len)
 {
     if (len < 11) return;
@@ -320,6 +337,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (GetFileAttributesA(BUILD "story_off.txt") != INVALID_FILE_ATTRIBUTES) { S.off = 1; return; }
     S.off = 0; S.role = role_of(); S.keep_birds = GetFileAttributesA(BUILD "ambient_keep.txt") != INVALID_FILE_ATTRIBUTES;
     if (a->hero != S.last_hero) { S.last_hero = a->hero; S.last_hero_t = now; reset_story(); S.qsys = NULL; S.nq = 0; S.scanning = 0; S.have_contact = 0; }
+    if (a->hero && now - S.last_hero_t >= 10000) obs_tick(a);                              /* works with a single copy too */
     if (!a->hero || !a->have_remote || now - S.last_hero_t < 10000) return;               /* a new world has to settle first */
     if (S.story && !same_obj(a, S.story, S.story_fn)) reset_story();
     if (S.qsys && !same_obj(a, S.qsys, S.qsys_fn)) { S.qsys = NULL; S.nq = 0; }
