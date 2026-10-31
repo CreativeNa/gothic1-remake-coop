@@ -133,10 +133,10 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
 {
     unsigned long now = GetTickCount();
     if (GetFileAttributesA(BUILD "menu_off.txt") != INVALID_FILE_ATTRIBUTES) return;
-    if (M.menu) { static unsigned long t_chk; if (now - t_chk > 1500) { t_chk = now; uint8_t *nw = find_menu(a); if (nw && nw != M.menu) { a->log("MENU: a newer menu object appeared"); M.fn_bad = 1; } } }
+    if (M.menu) { static unsigned long t_chk; if (now - t_chk > (a->hero ? 8000 : 1500)) { t_chk = now; uint8_t *nw = find_menu(a); if (nw && nw != M.menu) { a->log("MENU: a newer menu object appeared"); M.fn_bad = 1; } } }
     if (M.fn_bad || (M.menu && !same_obj(a, M.menu, M.menu_fn))) { M.fn_bad = 0; M.menu = M.btn = M.label = M.box = NULL; M.created = 0; M.tries = 0; M.was_pressed = 0; }
     if (!M.menu) {
-        if (now - M.last_find < 1500) return; M.last_find = now;
+        if (now - M.last_find < (a->hero ? 8000 : 1500)) return; M.last_find = now;                 /* the scan walks every object (up to 90 ms): rarely while a game is running */
         M.menu = find_menu(a); if (!M.menu) return;
         a->read_mem(M.menu + 0x18, M.menu_fn, 8); a->log("MENU: main menu widget found (%p)", M.menu);
     }
