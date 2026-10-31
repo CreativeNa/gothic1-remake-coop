@@ -26,7 +26,7 @@ typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_
 #pragma pack(pop)
 
 typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1; } Transform;   /* FTransform: FQuat, translation, scale */
-typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int16_t sc[MAXB][3]; unsigned shash; int have, dirty, pending, napplied; unsigned long t, topt, titems; uint8_t orig_col; } GPose;   /* guest: bone-driven copy of one NPC */
+typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int16_t sc[MAXB][3]; unsigned shash; int have, dirty, pending, napplied, checked; unsigned long t, topt, titems; uint8_t orig_col; } GPose;   /* guest: bone-driven copy of one NPC */
 typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; uint8_t last[MAXB * 12]; unsigned long next_t; int interval; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
 typedef struct { uint8_t *actor; uint32_t id; } Known;
 typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
@@ -343,6 +343,17 @@ static int reparent_items(CoreAPI *a, uint8_t *from, uint8_t *to, uint8_t *owner
     return moved;
 }
 
+static char SKIP[300]; static unsigned long skip_t;
+static int npc_skip_has(const char *name)
+{
+    unsigned long now = GetTickCount();
+    if (now - skip_t > 1500) { skip_t = now; SKIP[0] = 0; FILE *f = fopen(BUILD "npc_skip.txt", "r"); if (f) { if (fgets(SKIP, sizeof SKIP, f)) { char *e = SKIP + strlen(SKIP); while (e > SKIP && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0; } fclose(f); } }
+    if (!SKIP[0]) return 0;
+    char tmp[300]; snprintf(tmp, sizeof tmp, "%s", SKIP);
+    for (char *t = strtok(tmp, ","); t; t = strtok(NULL, ",")) if (*t && strstr(name, t)) return 1;
+    return 0;
+}
+
 /* ---- guest: bone-driven NPC (a PoseableMeshComponent with the NPC's own mesh asset, the original mesh hidden) ---- */
 static void gp_drop(CoreAPI *a, Mirror *m)
 {
@@ -417,6 +428,8 @@ static void gp_apply(CoreAPI *a, Mirror *m)
         int16_t v[6]; memcpy(v, g->data + i * 12, 12);
         if (0 && g->napplied == g->nb && memcmp(g->applied + i * 12, g->data + i * 12, 12) == 0) continue;     /* skipping "unchanged" bones left a bone behind when its parent moved */     /* this bone did not change: no engine call */
         if (strncmp(g->names[i], "ik_", 3) == 0) continue;
+        if (npc_skip_has(g->names[i])) continue;                                       /* build
+pc_skip.txt: comma separated name parts that are left alone (diagnosis) */
         if (i > 0 && !(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) continue;
         double x = v[0] / 32767.0, y = v[1] / 32767.0, z = v[2] / 32767.0, w2 = 1.0 - x * x - y * y - z * z;
         Transform tr; memset(&tr, 0, sizeof tr); tr.q[0] = x; tr.q[1] = y; tr.q[2] = z; tr.q[3] = w2 > 0 ? sqrt(w2) : 0; tr.t[0] = v[3] / 50.0; tr.t[1] = v[4] / 50.0; tr.t[2] = v[5] / 50.0; tr.s[0] = g->sc[i][0] / 1000.0; tr.s[1] = g->sc[i][1] / 1000.0; tr.s[2] = g->sc[i][2] / 1000.0;
@@ -425,6 +438,27 @@ static void gp_apply(CoreAPI *a, Mirror *m)
         a->call_fn(g->comp, "PoseableMeshComponent", "SetBoneTransformByName", 3, names, vals, sizes, NULL, 0);
     }
     memcpy(g->applied, g->data, (size_t)g->nb * 12); g->napplied = g->nb;
+    if (g->pending == 0 && !g->checked) {   /* diagnosis, once per NPC: read the bones back from the bone-driven mesh and name the ones that are far from the target */
+        g->checked = 1; struct { double e; int i; } top[8]; int nt = 0;
+        for (int i = 1; i < g->nb; i++) {
+            int16_t v[6]; memcpy(v, g->data + i * 12, 12); if (!(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) continue;
+            Transform rb; memset(&rb, 0, sizeof rb); uint8_t sp2 = 2; const char *nn[2] = { "InSocketName", "TransformSpace" }; const void *vv[2] = { g->fnm[i], &sp2 }; int ss[2] = { -2, 1 };
+            if (!a->call_fn(g->comp, "SceneComponent", "GetSocketTransform", 2, nn, vv, ss, &rb, (int)sizeof rb)) continue;
+            double dx = rb.t[0] - v[3] / 50.0, dy = rb.t[1] - v[4] / 50.0, dz = rb.t[2] - v[5] / 50.0, e = sqrt(dx * dx + dy * dy + dz * dz);
+            int pos = nt; while (pos > 0 && top[pos - 1].e < e) pos--; if (pos >= 8) continue;
+            for (int k = (nt < 8 ? nt : 7); k > pos; k--) top[k] = top[k - 1]; top[pos].e = e; top[pos].i = i; if (nt < 8) nt++;
+        }
+        {   /* where do the bones that the host could not report (face, ribs, scapula, radius ...) end up in the bone-driven mesh, next to the head and the spine? */
+            const char *want[] = { "Head", "neck_03", "face_C_skull", "Jaw", "helmet", "eye_l", "radius_r", "scapula_r", "chestpiece", "rib_01_l", "belt_01", "bag_r_01", "spine_05" };
+            for (size_t w = 0; w < sizeof want / sizeof want[0]; w++) for (int i = 1; i < g->nb; i++) if (!strcmp(g->names[i], want[w])) {
+                Transform rb; memset(&rb, 0, sizeof rb); uint8_t sp2 = 2; const char *nn[2] = { "InSocketName", "TransformSpace" }; const void *vv[2] = { g->fnm[i], &sp2 }; int ss[2] = { -2, 1 };
+                a->call_fn(g->comp, "SceneComponent", "GetSocketTransform", 2, nn, vv, ss, &rb, (int)sizeof rb);
+                int16_t v[6]; memcpy(v, g->data + i * 12, 12);
+                a->log("N guest: bone #%d %s now at %.1f %.1f %.1f (host reported %s)", i, g->names[i], rb.t[0], rb.t[1], rb.t[2], (v[0] | v[1] | v[2] | v[3] | v[4] | v[5]) ? "a transform" : "nothing"); break;
+            }
+        }
+        for (int k = 0; k < nt; k++) { int i = top[k].i; int16_t v[6]; memcpy(v, g->data + i * 12, 12); a->log("N guest: after applying, bone #%d %s is %.1f off (target loc %.1f %.1f %.1f)", i, g->names[i], top[k].e, v[3] / 50.0, v[4] / 50.0, v[5] / 50.0); }
+    }
     N.n_posed++;
 }
 
