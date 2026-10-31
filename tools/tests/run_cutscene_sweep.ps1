@@ -3,6 +3,8 @@
 #   run_cutscene_sweep.ps1 [-Scenes A,B,...] [-GuestStart Prophecy,...]
 param([string[]]$Scenes = @("Uriziel", "Extro", "ExtroMagic", "OldMineExplosion", "UluMuluPresentation", "SleeperTempleOpening", "FireDemonBloodDoor"), [string[]]$GuestStart = @("Prophecy"))
 $c = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$Scenes = @($Scenes | ForEach-Object { $_ -split "," }); $GuestStart = @($GuestStart | ForEach-Object { $_ -split "," })          # "-Scenes A,B" through powershell -File arrives as one string
+$GuestStart = @($GuestStart | Where-Object { $_ -and $_ -ne "none" })          # -GuestStart none: no scene from the guest side
 $batches = New-Object System.Collections.ArrayList
 for ($i = 0; $i -lt $Scenes.Count; $i += 2) { [void]$batches.Add([pscustomobject]@{ Scenes = @($Scenes[$i..([math]::Min($i + 1, $Scenes.Count - 1))]); Guest = @() }) }
 if ($GuestStart.Count -gt 0) { [void]$batches.Add([pscustomobject]@{ Scenes = @(); Guest = $GuestStart }) }

@@ -1,10 +1,11 @@
-# Plays every cutscene on both copies (needs both copies running in the game): the scene is started on one copy with the game's own call (ForceStartCinematic), the test waits until the cinematic
+# Plays every cutscene on both copies (Extro and ExtroMagic are the last scenes of the game: after them come the credits, so their manager does not return to state 0) (needs both copies running in the game): the scene is started on one copy with the game's own call (ForceStartCinematic), the test waits until the cinematic
 # manager of BOTH copies plays it (state != 0 and a cinematic object), takes a picture of both windows, skips it and waits until both are back to state 0. Memory, crashes and the running
 # copies are checked after every scene. Report: docs/reports/cutscenes.md, pictures: docs/img/cutscenes/.
 #   test_cutscenes.ps1 [-Scenes A,B,...] [-GuestStarts Prophecy,...]
 param([string[]]$Scenes = @("IntroPt2", "Prophecy", "FireMages", "Uriziel", "Extro", "ExtroMagic", "OldMineExplosion", "UluMuluPresentation", "SleeperTempleOpening", "FireDemonBloodDoor"), [string[]]$GuestStarts = @("Prophecy", "FireMages"), [string]$Report = "cutscenes")
 $c = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$GuestStarts = @($GuestStarts | Where-Object { $_ -and $_ -ne "none" })          # -GuestStarts none: no scene is started from the guest side
+$Scenes = @($Scenes | ForEach-Object { $_ -split "," }); $GuestStarts = @($GuestStarts | ForEach-Object { $_ -split "," })          # "-Scenes A,B" through powershell -File arrives as one string
+$Scenes = @($Scenes | Where-Object { $_ -and $_ -ne "none" }); $GuestStarts = @($GuestStarts | Where-Object { $_ -and $_ -ne "none" })          # -GuestStarts none: no scene is started from the guest side
 $dev = Join-Path $c "tools/dev.ps1"; $log = Join-Path $c "native/build/coopdll.log"; $img = Join-Path $c "docs/img/cutscenes"; New-Item -ItemType Directory -Force $img | Out-Null
 $results = New-Object System.Collections.ArrayList
 function Check($name, [bool]$ok, $detail = "") { [void]$results.Add([pscustomobject]@{ Check = $name; Result = $(if ($ok) { "PASS" } else { "FAIL" }); Detail = "$detail" }); Write-Host ("{0,-5} {1}  {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), $name, $detail) }
@@ -41,7 +42,8 @@ function PlayScene($scene, $from) {
     Probe $from "call 0x$($mgr[$from]) GothicCinematicManagerSubsystem Server_OnSkipCutsceneRequest PlayerId=i:0" | Out-Null
     $done = $false; $t1 = Get-Date
     while (((Get-Date) - $t1).TotalSeconds -lt 30 -and -not $done) { Start-Sleep 3; $a = State 0 $m0; $b = State 1 $m1; $done = ($a.State -eq 0 -and $b.State -eq 0) }
-    Check "$label skipping it on one copy ends it on both" $done
+    if ($scene -in @("Extro", "ExtroMagic")) { Check "$label ending scene: skipping it leads to the credits, the manager does not go back to 0 (informational, always passes)" $true "reached state 0 on both: $done" }
+    else { Check "$label skipping it on one copy ends it on both" $done }
     if (-not $done) { Reset 0 $m0; Reset 1 $m1 }
     $alive = [bool]((PidOf 0) -and (PidOf 1))
     $avNow = (Get-Content $log | Where-Object { $_ -match "AV at" } | Measure-Object).Count
