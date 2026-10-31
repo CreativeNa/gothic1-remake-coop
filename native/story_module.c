@@ -374,6 +374,8 @@ static void obs_tick(CoreAPI *a)
               char cname[48] = ""; uint8_t type = ci == 2 ? 1 : ci == 3 ? 2 : ci == 4 ? 3 : 0;
               if (type == 0 && hl && plen >= 8) { uint8_t *cl; memcpy(&cl, pb, 8); if (cl) a->obj_name(cl, cname, sizeof cname); }
               if (type == 3 && hl && plen >= 4) { int32_t chn; memcpy(&chn, pb, 4); snprintf(cname, sizeof cname, "%d", chn); }
+              if (type == 3 && !cname[0] && S.story && S.chap_off >= 0) {                              /* a bytecode call carries no parameter buffer (the real trigger point): the banner is for the chapter the story object holds now */
+                  int32_t chn = 0; if (a->read_mem(S.story + S.chap_off, &chn, 4) && chn > 0 && chn < 20) snprintf(cname, sizeof cname, "%d", chn); }
               a->log("S cine: %s %s (%s)", OBS_CINE[ci], cname, hl ? "params seen" : "bytecode call, no params");
               if (obj && ci < 4) { S.cine_mgr = obj; a->read_mem(obj + 0x18, S.cine_fn, 8); }
               if (ci == 0) continue;                                                                /* ForceStartCinematic (script call) ends in Server_OnForceStartCinematic, which the game's own start path (the intro) calls directly: the inner call is the one that is sent */
@@ -423,7 +425,15 @@ static void apply_remote(CoreAPI *a, const uint8_t *B, int len)
         if (idx > S.nw || !S.story) continue;
         if (S.pend[idx] && S.role == 1) continue;                                        /* conflict: the host wins */
         int off = idx == S.nw ? S.chap_off : S.blk_off + idx * 4; if (off < 0) continue;
-        if (a->write_mem(S.story + off, &v, 4)) { S.cur[idx] = v; S.base[idx] = v; S.pend[idx] = 0; S.n_applied_w++; }
+        int32_t oldv = 0; if (idx == S.nw) a->read_mem(S.story + off, &oldv, 4);
+        if (a->write_mem(S.story + off, &v, 4)) {
+            S.cur[idx] = v; S.base[idx] = v; S.pend[idx] = 0; S.n_applied_w++;
+            if (idx == S.nw && oldv > 0 && v == oldv + 1) {                                 /* the other copy entered the next chapter: its banner comes here with the chapter number (the game's own call is not seen by the observer at the real trigger point) */
+                int32_t ch = v; const char *nn[1] = { "NewChapter" }; const void *vv[1] = { &ch }; int sz[1] = { 4 };
+                int ok = a->call_fn(S.story, "GameStory", "RequestChapterHUDNotification", 1, nn, vv, sz, NULL, 0);
+                a->log("S chapter %d -> %d came from the other copy: banner %s", oldv, v, ok ? "shown" : "failed");
+            }
+        }
     }
     for (int k = 0; k < nq; k++, p += 5) {
         uint32_t id; memcpy(&id, B + p, 4); uint8_t st = B[p + 4];
