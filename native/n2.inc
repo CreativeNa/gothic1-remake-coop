@@ -932,10 +932,10 @@ static void spawn_apart(double fx, double fy, double fz)
     double h[3]; read_hero_pos(h);
     double dx = h[0] - fx, dy = h[1] - fy;
     if (sqrt(dx * dx + dy * dy) > 150.0 || fabs(h[2] - fz) > 200.0) return;        /* not on top of the host: nothing to do */
-    Vec3 np = { fx + 180.0, fy, fz };
+    Vec3 np = { fx + 110.0, fy, fz };
     uint8_t *b = pnew(&T.setloc), sweep = 0, tele = 1; pset(&T.setloc, b, "NewLocation", &np, 24); pset(&T.setloc, b, "bSweep", &sweep, 1); pset(&T.setloc, b, "bTeleport", &tele, 1);
     int ok = pcall(T.hero, &T.setloc, b); _aligned_free(b);
-    logf_("N3 spawn: the guest stood on the host's spot, moved 180 units aside (ok=%d)", ok);
+    logf_("N3 spawn: the guest stood on the host's spot, moved 110 units aside (ok=%d)", ok);
 }
 static void module_frame(void)  { module_run(0); }     /* modules that need the puppet */
 static void module_always(void)  { module_run(1); }     /* modules that run every tick */
