@@ -6,7 +6,10 @@
  * In the main menu the core does not poll for new module builds: restart the game to load a new build there.
  */
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "user32.lib")
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -144,5 +147,25 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     /* a click: the button is pressed and then released */
     uint8_t pr = 0; if (M.btn && a->obj_alive(M.btn, NULL)) a->call_fn(M.btn, "ButtonWidget", "IsPressed", 0, NULL, NULL, NULL, &pr, 1);
     if (pr && !M.was_pressed) { M.was_pressed = 1; }
-    else if (!pr && M.was_pressed) { M.was_pressed = 0; M.clicks++; a->log("MENU: the co-op button was clicked (#%d)", M.clicks); }
+    else if (!pr && M.was_pressed) {
+        M.was_pressed = 0; M.clicks++; a->log("MENU: the co-op button was clicked (#%d)", M.clicks);
+        /* the clipboard holds the friend's address ("1.2.3.4" or "1.2.3.4:40001") -> join; anything else -> host and wait for the friend. The core reads connect.txt when the game is entered. */
+        char clip[96] = "", line[160]; int port = 40001;
+        if (OpenClipboard(NULL)) { HANDLE h = GetClipboardData(CF_TEXT); if (h) { const char *t = (const char *)GlobalLock(h); if (t) { strncpy(clip, t, sizeof clip - 1); GlobalUnlock(h); } } CloseClipboard(); }
+        { char *e = strpbrk(clip, "\r\n \t"); if (e) *e = 0; }
+        char ip[64] = ""; int a1, a2, a3, a4, pp = 0, nn = sscanf(clip, "%d.%d.%d.%d:%d", &a1, &a2, &a3, &a4, &pp);
+        if (nn >= 4 && a1 >= 0 && a1 < 256 && a2 >= 0 && a2 < 256 && a3 >= 0 && a3 < 256 && a4 >= 0 && a4 < 256) {
+            snprintf(ip, sizeof ip, "%d.%d.%d.%d", a1, a2, a3, a4); if (nn == 5 && pp > 0 && pp < 65536) port = pp;
+            snprintf(line, sizeof line, "join %s %d\n", ip, port);
+        } else {
+            snprintf(line, sizeof line, "host %d\n", port);
+            /* the friend connects through Radmin VPN: the own Radmin address (26.x.x.x) is put on the clipboard so it can be sent to the friend, and shown on the button */
+            char host[64] = ""; char nm[256]; WSADATA wd; WSAStartup(MAKEWORD(2, 2), &wd); if (gethostname(nm, sizeof nm) == 0) { struct hostent *he = gethostbyname(nm); for (int i = 0; he && he->h_addr_list[i]; i++) { unsigned char *b = (unsigned char *)he->h_addr_list[i]; if (b[0] == 26) { snprintf(host, sizeof host, "%d.%d.%d.%d", b[0], b[1], b[2], b[3]); break; } } }
+            if (host[0] && OpenClipboard(NULL)) { EmptyClipboard(); HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, strlen(host) + 1); if (g) { memcpy(GlobalLock(g), host, strlen(host) + 1); GlobalUnlock(g); SetClipboardData(CF_TEXT, g); } CloseClipboard(); }
+            snprintf(ip, sizeof ip, "%s", host);
+        }
+        FILE *f = fopen(BUILD "connect.txt", "w"); if (f) { fputs(line, f); fclose(f); }
+        wchar_t lab[96]; swprintf(lab, 96, L"%ls [%hs]", LANG[M.lang].label, ip[0] ? ip : "host"); set_label(a, lab);
+        a->log("MENU: connect.txt written: %s", line);
+    }
 }

@@ -115,10 +115,23 @@ static int net_init(void)
     int lport = 0, pport = 0;
     snprintf(path, sizeof path, "%s\\cfg_%lu.txt", g_dir, GetCurrentProcessId());
     FILE *f = fopen(path, "r");
-    if (!f) { logf_("net: no cfg file %s", path); return 0; }
-    if (!fgets(line, sizeof line, f)) { fclose(f); return 0; }
-    fclose(f);
-    if (sscanf(line, "%d %63s %d %15s", &lport, host, &pport, T.id) != 4) { logf_("net: bad cfg '%s'", line); return 0; }
+    if (f) {
+        if (!fgets(line, sizeof line, f)) { fclose(f); return 0; }
+        fclose(f);
+        if (sscanf(line, "%d %63s %d %15s", &lport, host, &pport, T.id) != 4) { logf_("net: bad cfg '%s'", line); return 0; }
+    } else {                                                               /* the Co-op button of the main menu writes connect.txt: "host <port>" or "join <address> <port>" */
+        snprintf(path, sizeof path, "%s\\connect.txt", g_dir);
+        f = fopen(path, "r");
+        if (!f) { logf_("net: no cfg file and no connect.txt (the Co-op button of the main menu was not used)"); return 0; }
+        char mode[16] = "";
+        if (!fgets(line, sizeof line, f)) { fclose(f); return 0; }
+        fclose(f);
+        if (sscanf(line, "%15s", mode) != 1) return 0;
+        if (!strcmp(mode, "host") && sscanf(line, "%*s %d", &lport) == 1) { pport = 0; strcpy(host, "0.0.0.0"); strcpy(T.id, "S0"); }
+        else if (!strcmp(mode, "join") && sscanf(line, "%*s %63s %d", host, &pport) == 2) { lport = pport; strcpy(T.id, "S1"); }
+        else { logf_("net: bad connect.txt '%s'", line); return 0; }
+        logf_("net: connect.txt says %s", mode);
+    }
     WSADATA w; WSAStartup(MAKEWORD(2, 2), &w);
     T.sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     struct sockaddr_in a; memset(&a, 0, sizeof a);
@@ -1214,7 +1227,7 @@ static void frame_work(void)
         double h[3]; read_hero_pos(h);
         double r[3] = {0}; safe_read(T.root + 320, r, 24);   /* RelativeRotation: pitch, yaw, roll */
         int gate_blocked = 0;
-        if (T.net_ok && T.frame % 3 == 0) {
+        if (T.net_ok && T.peer.sin_addr.s_addr != 0 && T.frame % 3 == 0) {
             gate_tick();
             if (g_gate_on) {                                                       /* beacon: the host tells its state, the guest says hello until it is let in */
                 char gm[8]; int gl = g_role_host ? snprintf(gm, sizeof gm, "G|%d", g_gate_open ? 1 : 0) : snprintf(gm, sizeof gm, "G|H");
@@ -1222,7 +1235,7 @@ static void frame_work(void)
                 gate_blocked = !gate_accepts();
             }
         }
-        if (T.net_ok && T.frame % 3 == 0 && !gate_blocked) {
+        if (T.net_ok && T.peer.sin_addr.s_addr != 0 && T.frame % 3 == 0 && !gate_blocked) {
             char msg[1600], act[96]; int mm = 1;
             local_action(act, sizeof act, &mm);
             if (strcmp(act, T.sent_act) != 0) { logf_("A local action -> %s (movemode %d)", act, mm); snprintf(T.sent_act, sizeof T.sent_act, "%s", act); }
@@ -1268,7 +1281,10 @@ static void frame_work(void)
                 struct sockaddr_in from; int fromlen = sizeof from;
                 int n = recvfrom(T.sock, rx, sizeof rx - 1, 0, (struct sockaddr *)&from, &fromlen);
                 if (n <= 0) break;
-                if (from.sin_addr.s_addr != T.peer.sin_addr.s_addr) {           /* only the configured friend may talk to us */
+                if (T.peer.sin_addr.s_addr == 0 && n >= 3 && rx[0] == 'G' && rx[1] == '|' && rx[2] == 'H') {      /* host mode: the first friend who knocks is the friend */
+                    T.peer.sin_addr = from.sin_addr; T.peer.sin_port = from.sin_port; char fb[64]; inet_ntop(AF_INET, &from.sin_addr, fb, sizeof fb); logf_("net: the friend knocked from %s:%d, this is now the peer", fb, ntohs(from.sin_port));
+                }
+                if (T.peer.sin_addr.s_addr == 0 || from.sin_addr.s_addr != T.peer.sin_addr.s_addr) {           /* only the configured friend may talk to us */
                     static int rejected; if (rejected++ < 3) { char fb[64]; inet_ntop(AF_INET, &from.sin_addr, fb, sizeof fb); logf_("net: ignored a packet from %s", fb); }
                     continue;
                 }
