@@ -26,7 +26,7 @@ typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_
 #pragma pack(pop)
 
 typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1; } Transform;   /* FTransform: FQuat, translation, scale */
-typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int have, dirty, napplied; unsigned long t, topt, titems; uint8_t orig_col; } GPose;   /* guest: bone-driven copy of one NPC */
+typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int16_t sc[MAXB][3]; unsigned shash; int have, dirty, pending, napplied; unsigned long t, topt, titems; uint8_t orig_col; } GPose;   /* guest: bone-driven copy of one NPC */
 typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; uint8_t last[MAXB * 12]; unsigned long next_t; int interval; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
 typedef struct { uint8_t *actor; uint32_t id; } Known;
 typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
@@ -153,7 +153,7 @@ static HPose *hpose_for(uint8_t *actor)
     HPose *h = &N.hp[slot]; memset(h, 0, sizeof *h); h->actor = actor;
     return h;
 }
-static int read_pose(CoreAPI *a, uint8_t *actor, uint8_t *out, int *nb_out)
+static int read_pose(CoreAPI *a, uint8_t *actor, uint8_t *out, int *nb_out, int16_t (*sp)[4], int *nsp)
 {
     uint8_t *mesh = ptr_prop(a, actor, "Mesh"); if (!mesh) return 0;
     HPose *h = hpose_for(actor);
@@ -163,16 +163,36 @@ static int read_pose(CoreAPI *a, uint8_t *actor, uint8_t *out, int *nb_out)
         for (int i = 0; i < n; i++) { const char *nn[1] = { "BoneIndex" }; const void *vv[1] = { &i }; int ss[1] = { 4 }; a->call_fn(mesh, "SkinnedMeshComponent", "GetBoneName", 1, nn, vv, ss, h->fnm[i], 8); }
         h->mesh = mesh; h->nb = n;
     }
+    *nsp = 0;
     for (int i = 0; i < h->nb; i++) {
-        Transform tr; memset(&tr, 0, sizeof tr); tr.q[3] = 1; uint8_t space = 2;   /* RTS_Component */
+        Transform tr; memset(&tr, 0, sizeof tr); tr.q[3] = 1; tr.s[0] = tr.s[1] = tr.s[2] = 1; uint8_t space = 2;   /* RTS_Component */
         const char *names[2] = { "InSocketName", "TransformSpace" }; const void *vals[2] = { h->fnm[i], &space }; int sizes[2] = { -2, 1 };
         a->call_fn(mesh, "SceneComponent", "GetSocketTransform", 2, names, vals, sizes, &tr, (int)sizeof tr);
         int bad = 0; for (int c = 0; c < 4; c++) if (!isfinite(tr.q[c])) bad = 1; for (int c = 0; c < 3; c++) if (!isfinite(tr.t[c]) || fabs(tr.t[c]) > 600) bad = 1;
-        if (bad) { memset(&tr, 0, sizeof tr); tr.q[3] = 1; }
+        if (bad) { memset(&tr, 0, sizeof tr); tr.q[3] = 1; tr.s[0] = tr.s[1] = tr.s[2] = 1; }
+        for (int c = 0; c < 3; c++) if (!isfinite(tr.s[c]) || tr.s[c] < 0.01 || tr.s[c] > 30) tr.s[c] = 1;
         double nq = sqrt(tr.q[0] * tr.q[0] + tr.q[1] * tr.q[1] + tr.q[2] * tr.q[2] + tr.q[3] * tr.q[3]); if (nq < 1e-6) { tr.q[0] = tr.q[1] = tr.q[2] = 0; tr.q[3] = 1; nq = 1; }
         double sg = tr.q[3] < 0 ? -1.0 / nq : 1.0 / nq;
         int16_t v[6] = { q16(tr.q[0] * sg, 32767), q16(tr.q[1] * sg, 32767), q16(tr.q[2] * sg, 32767), q16(tr.t[0], 50), q16(tr.t[1], 50), q16(tr.t[2], 50) };
         memcpy(out + i * 12, v, 12);
+        if (fabs(tr.s[0] - 1) > 0.002 || fabs(tr.s[1] - 1) > 0.002 || fabs(tr.s[2] - 1) > 0.002) {      /* bones with a scale (body proportions: broad shoulders, big hands ...): without it the skin is pulled into spikes */
+            if (*nsp < 160) { sp[*nsp][0] = (int16_t)i; sp[*nsp][1] = q16(tr.s[0], 1000); sp[*nsp][2] = q16(tr.s[1], 1000); sp[*nsp][3] = q16(tr.s[2], 1000); (*nsp)++; }
+        }
+    }
+    {   /* diagnostics (once per NPC): bones that came back empty, the bone count and the first non-trivial scales */
+        static uint8_t *seen[16]; static int ns; (void)seen; int already = 0; for (int q = 0; q < ns; q++) if (seen[q] == actor) already = 1;
+        if (!already && ns < 16) {
+            seen[ns++] = actor; int zero = 0; char first[400] = "";
+            for (int i = 1; i < h->nb; i++) { int16_t *v = (int16_t *)(out + i * 12); if (!(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) { zero++; if (strlen(first) < 300) { char nm[64]; a->fname_to_str(h->fnm[i], nm, sizeof nm); if (strncmp(nm, "face_", 5) != 0) { strcat(first, nm); strcat(first, " "); } } } }
+            char an[160]; a->obj_name(actor, an, sizeof an);
+            a->log("N host: pose of %s: %d bones, %d empty (%s), %d scaled bones", an, h->nb, zero, first, *nsp);
+            for (int i = 1; i < h->nb; i++) {
+                char nm[64]; a->fname_to_str(h->fnm[i], nm, sizeof nm);
+                if (strcmp(nm, "head") && strcmp(nm, "Head") && strcmp(nm, "neck_01") && strcmp(nm, "neck_02") && strcmp(nm, "spine_05") && strcmp(nm, "clavicle_l") && strcmp(nm, "pelvis") && strcmp(nm, "upperarm_l") && strcmp(nm, "face_C_skull")) continue;
+                int16_t *v = (int16_t *)(out + i * 12); double q0 = v[0] / 32767.0, q1 = v[1] / 32767.0, q2 = v[2] / 32767.0;
+                a->log("N host:   bone #%d %s  quat %.2f %.2f %.2f  loc %.1f %.1f %.1f", i, nm, q0, q1, q2, v[3] / 50.0, v[4] / 50.0, v[5] / 50.0);
+            }
+        }
     }
     *nb_out = h->nb; return 1;
 }
@@ -231,14 +251,15 @@ static void host_tick(CoreAPI *a, unsigned long now)
     if (!nobones && N.nfocus > 0 && blen + 6 + MAXB * 12 <= (int)sizeof buf) {
         uint8_t *o = NULL; HPose *hp = NULL;                                      /* the next focus NPC whose turn has come (a pose that did not change is read less and less often) */
         for (int k = 0; k < N.nfocus && !o; k++) { uint8_t *c = N.focus[N.rr++ % N.nfocus]; HPose *h = hpose_for(c); if (now >= h->next_t) { o = c; hp = h; } }
-        static uint8_t pb[MAXB * 12]; int nb = 0;
+        static uint8_t pb[MAXB * 12]; int nb = 0; static int16_t spb[160][4]; int nsp = 0;
         uint32_t id = 0; if (o) for (int i = 0; i < N.nknown; i++) if (N.known[i].actor == o) id = N.known[i].id;
-        if (id && read_pose(a, o, pb, &nb) && blen + 6 + nb * 12 <= (int)sizeof buf) {
+        if (id && read_pose(a, o, pb, &nb, spb, &nsp) && blen + 6 + nb * 12 + 2 + nsp * 8 <= (int)sizeof buf) {
             int same = hp->nb == nb && memcmp(hp->last, pb, (size_t)nb * 12) == 0;
             memcpy(hp->last, pb, (size_t)nb * 12);
             hp->interval = same ? (hp->interval < 150 ? 300 : (hp->interval * 2 > 2500 ? 2500 : hp->interval * 2)) : 150;
             hp->next_t = now + (unsigned long)hp->interval;
             buf[blen - 1] = 1; memcpy(buf + blen, &id, 4); buf[blen + 4] = (uint8_t)(nb & 255); buf[blen + 5] = (uint8_t)(nb >> 8); memcpy(buf + blen + 6, pb, (size_t)nb * 12); blen += 6 + nb * 12;
+            buf[blen] = (uint8_t)(nsp & 255); buf[blen + 1] = (uint8_t)(nsp >> 8); memcpy(buf + blen + 2, spb, (size_t)nsp * 8); blen += 2 + nsp * 8;
         }
     }
     a->set_local_blob2(buf, blen);
@@ -382,8 +403,9 @@ static void gp_apply(CoreAPI *a, Mirror *m)
 {
     GPose *g = m->gp; if (!g || g->bad) return;
     if (g->comp && g->mesh && GetTickCount() - g->titems > 1000) { g->titems = GetTickCount(); if (a->obj_alive(g->comp, NULL) && a->obj_alive(g->mesh, NULL)) { int mv = reparent_items(a, g->mesh, g->comp, m->actor); if (mv) a->log("N guest: %d new item(s) of NPC %p moved to its bone-driven mesh", mv, m->actor); } }
-    if (!g->dirty) return;
-    g->dirty = 0;
+    if (g->dirty) { g->dirty = 0; g->pending = g->napplied ? 10 : 36; }       /* the bone hierarchy is ~15 levels deep and each pass fixes one more level */                          /* a pose is applied over several frames in a row: SetBoneTransformByName converts a bone through its parent's pose of the LAST refresh, */
+    if (g->pending <= 0) return;                                           /* so after a big jump (standing -> sitting) the first pass leaves the children wrong and the next passes pull them in */
+    g->pending--;
     if (!gp_ensure(a, m, g)) return;
     if (g->nbn != g->nb) {
         int n = 0; a->call_fn(g->mesh, "SkinnedMeshComponent", "GetNumBones", 0, NULL, NULL, NULL, &n, 4);
@@ -393,11 +415,11 @@ static void gp_apply(CoreAPI *a, Mirror *m)
     }
     for (int i = 0; i < g->nb; i++) {
         int16_t v[6]; memcpy(v, g->data + i * 12, 12);
-        if (g->napplied == g->nb && memcmp(g->applied + i * 12, g->data + i * 12, 12) == 0) continue;     /* this bone did not change: no engine call */
+        if (0 && g->napplied == g->nb && memcmp(g->applied + i * 12, g->data + i * 12, 12) == 0) continue;     /* skipping "unchanged" bones left a bone behind when its parent moved */     /* this bone did not change: no engine call */
         if (strncmp(g->names[i], "ik_", 3) == 0) continue;
         if (i > 0 && !(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) continue;
         double x = v[0] / 32767.0, y = v[1] / 32767.0, z = v[2] / 32767.0, w2 = 1.0 - x * x - y * y - z * z;
-        Transform tr; memset(&tr, 0, sizeof tr); tr.q[0] = x; tr.q[1] = y; tr.q[2] = z; tr.q[3] = w2 > 0 ? sqrt(w2) : 0; tr.t[0] = v[3] / 50.0; tr.t[1] = v[4] / 50.0; tr.t[2] = v[5] / 50.0; tr.s[0] = tr.s[1] = tr.s[2] = 1;
+        Transform tr; memset(&tr, 0, sizeof tr); tr.q[0] = x; tr.q[1] = y; tr.q[2] = z; tr.q[3] = w2 > 0 ? sqrt(w2) : 0; tr.t[0] = v[3] / 50.0; tr.t[1] = v[4] / 50.0; tr.t[2] = v[5] / 50.0; tr.s[0] = g->sc[i][0] / 1000.0; tr.s[1] = g->sc[i][1] / 1000.0; tr.s[2] = g->sc[i][2] / 1000.0;
         uint8_t space = 1;                                                    /* EBoneSpaces::ComponentSpace */
         const char *names[3] = { "BoneName", "InTransform", "BoneSpace" }; const void *vals[3] = { g->fnm[i], &tr, &space }; int sizes[3] = { -2, (int)sizeof tr, 1 };
         a->call_fn(g->comp, "PoseableMeshComponent", "SetBoneTransformByName", 3, names, vals, sizes, NULL, 0);
@@ -413,6 +435,10 @@ static void freeze(CoreAPI *a, Mirror *m)
 pc_unpossess.txt = the old way (UnPossess). */
     m->ctrl = ptr_prop(a, m->actor, "Controller");
     m->unposs = GetFileAttributesA(BUILD "npc_unpossess.txt") != INVALID_FILE_ATTRIBUTES;
+    {   /* the guest hero must not hit a mirrored NPC: the host alone decides what happens to it (a local hit made the guest's own AI play a second, different reaction on top of the host's pose) */
+        uint8_t off = 0; const char *nn[1] = { "bNewActorEnableCollision" }; const void *vv[1] = { &off }; int ss[1] = { 1 };
+        a->call_fn(m->actor, "Actor", "SetActorEnableCollision", 1, nn, vv, ss, NULL, 0);
+    }
     if (m->unposs && m->ctrl) a->call_fn(m->ctrl, "Controller", "UnPossess", 0, NULL, NULL, NULL, NULL, 0);
     m->frozen = 1;
 }
@@ -423,6 +449,7 @@ static void release(CoreAPI *a, Mirror *m)
         const char *n[1] = { "InPawn" }; const void *v[1] = { &m->actor }; int s[1] = { 8 };
         a->call_fn(m->ctrl, "Controller", "Possess", 1, n, v, s, NULL, 0);
     }
+    if (m->frozen && m->actor && a->obj_alive(m->actor, NULL)) { uint8_t on = 1; const char *nn[1] = { "bNewActorEnableCollision" }; const void *vv[1] = { &on }; int ss[1] = { 1 }; a->call_fn(m->actor, "Actor", "SetActorEnableCollision", 1, nn, vv, ss, NULL, 0); }
     m->frozen = 0; m->have_cur = 0;
     if (m->anim[0] && m->actor && a->obj_alive(m->actor, NULL)) { m->anim[0] = 0; set_anim(a, m); }
 }
@@ -448,11 +475,19 @@ static void guest_tick(CoreAPI *a, unsigned long now)
             int po = 5 + cnt * (int)sizeof(Rec) + strpos;
             if (po + 7 <= len && B[po] == 1) {
                 uint32_t pid; memcpy(&pid, B + po + 1, 4); int nb = B[po + 5] | (B[po + 6] << 8);
-                if (nb > 0 && nb <= MAXB && po + 7 + nb * 12 <= len) {
+                int nsp = 0; if (nb > 0 && nb <= MAXB && po + 7 + nb * 12 + 2 <= len) nsp = B[po + 7 + nb * 12] | (B[po + 8 + nb * 12] << 8);
+                if (nb > 0 && nb <= MAXB && nsp >= 0 && nsp <= 160 && po + 9 + nb * 12 + nsp * 8 <= len) {
                     Mirror *m = mirror_for(a, pid);
                     if (m) {
                         if (!m->gp) m->gp = (GPose *)calloc(1, sizeof(GPose));
-                        if (m->gp) { m->gp->nb = nb; memcpy(m->gp->data, B + po + 7, (size_t)nb * 12); m->gp->have = 1; m->gp->dirty = 1; m->gp->t = now; }
+                        if (m->gp) {
+                            GPose *g = m->gp; g->nb = nb; memcpy(g->data, B + po + 7, (size_t)nb * 12);
+                            for (int i = 0; i < nb; i++) g->sc[i][0] = g->sc[i][1] = g->sc[i][2] = 1000;
+                            unsigned h = 2166136261u;
+                            for (int k2 = 0; k2 < nsp; k2++) { int16_t e[4]; memcpy(e, B + po + 9 + nb * 12 + k2 * 8, 8); if (e[0] >= 0 && e[0] < nb) { g->sc[e[0]][0] = e[1]; g->sc[e[0]][1] = e[2]; g->sc[e[0]][2] = e[3]; } for (int c2 = 0; c2 < 4; c2++) { h ^= (uint16_t)e[c2]; h *= 16777619u; } }
+                            if (h != g->shash) { g->shash = h; g->napplied = 0; }                 /* the scales changed: apply every bone again */
+                            g->have = 1; g->dirty = 1; g->t = now;
+                        }
                     }
                 }
             }

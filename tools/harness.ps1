@@ -5,7 +5,7 @@
 #   harness.ps1 act <InputAction>    press an Enhanced Input action in the host, e.g. IA_Ability_Action_EquipWeaponAuto
 #   harness.ps1 fight [n]            host hero draws the weapon and attacks the NPC n times with real game input actions (no keys, no mouse)
 #   harness.ps1 stop                 close both copies
-param([Parameter(Position = 0)][string]$Cmd = "shot", [Parameter(Position = 1)][string]$Arg = "", [string]$Npc = "Ratford")
+param([Parameter(Position = 0)][string]$Cmd = "shot", [Parameter(Position = 1)][string]$Arg = "", [string]$Npc = "Ratford", [int]$Dist = 260, [int]$Pitch = -12)
 $c = Split-Path $PSScriptRoot -Parent
 $dev = Join-Path $c "tools\dev.ps1"
 function PidOf($seat) { (Get-CimInstance Win32_Process -Filter "Name='G1R-Win64-Shipping.exe'" | Where-Object { $_.CommandLine -match "-CoopSeat=$seat(\s|$)" } | Select-Object -First 1).ProcessId }
@@ -22,8 +22,8 @@ switch ($Cmd) {
     "near" {
         foreach ($seat in 0, 1) {
             $n = NpcPtr $seat; if (-not $n) { "seat ${seat}: NPC $Npc not found"; continue }
-            Probe $seat "tpto 0x$n hero 260 0 10" | Select-String "tpto ran"; Start-Sleep 1
-            Probe $seat "lookat 0x$n" | Select-String "lookat ran"
+            Probe $seat "tpto 0x$n hero $Dist 0 10" | Select-String "tpto ran"; Start-Sleep 1
+            Probe $seat "lookat 0x$n 28 $Pitch" | Select-String "lookat ran"
         }
     }
     "hp" {
