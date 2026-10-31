@@ -106,6 +106,10 @@ The `probe` module (`native/probe_module.c`) reads `native\build\probe_cmd.txt` 
 | `tools\test_ko.ps1` | the host hero fights an NPC with real input actions until it is down, both windows are photographed into `docs\img\ko_*.png` (`-Attacker 1` lets the guest fight) |
 | probe commands | `inject <InputAction>`, `tpto`, `lookat`, `npchp`, `npcs`, `attached`, `@<seat> <command>` (run in one copy only) |
 
+| `tools\tests\run_all.ps1` | the full suite (boot, NPC sync by numbers, knock-out, two quick loads, fps, crashes): PASS / FAIL per check in `docs\reports\last_run.md`, about 7 minutes, no human needed |
+| `tools\diff_npcs.ps1` | host vs guest NPC positions / defeated flags / health as numbers |
+| `tools\logq.ps1 -Summary / -Crashes / -Seat N -Tag T` | query the log of the newest run by seat and tag (one log per harness run, older ones are in `native\build\logs\`) |
+
 The game reads input only while its window has the focus; `tools\realclick.ps1 -Seat N -Click 0` brings a window to the front.
 
 ## Repository layout
