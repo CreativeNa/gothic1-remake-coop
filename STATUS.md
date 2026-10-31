@@ -77,3 +77,7 @@ Last updated: 2026-10-31
 
 ### Not verified in the real game (2026-10-31)
 Everything added in the last stretch has only been checked by automated scripts and numbers with two copies on one PC, **not by a person playing**: NPC animation (montage) sync, chest take replay, world item pickup sync, chest emptied sync, story and quest sync, the memory-leak fix, and the new tooling. Real play, including over a network between two PCs, is still untested.
+
+### Open problems reported by the user (2026-11-01)
+- **Chapter start banner:** the banner that appears at the start of a story chapter is not synchronized: the second player does not get it (the chapter number itself is part of the synced story data, but the banner / HUD notification is a local event of the game that is not replayed).
+- **Falling through the ground after the UluMulu cutscene:** after the `UluMuluPresentation` cutscene finished, the players fell through the textures and kept falling. Not investigated yet. Suspects: the cutscene teleports the hero to its cinematic waypoint and back while the world data of that place is not loaded (the test runs half-resolution copies, two of them, with world streaming under memory pressure), a cutscene started by a probe call (not by the story) so the "after" logic did not run, or our own placement of NPCs / the puppet; the test harness `Restore-Heroes` also teleports heroes right after a cutscene.
