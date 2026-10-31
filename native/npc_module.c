@@ -821,6 +821,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     if (a->hero != N.last_hero) {                                            /* a new world (save loaded): nothing of the old one may be touched, and nothing is created while it is still settling */
         N.last_hero = a->hero; N.t_hero = now; N.nm = 0; N.nknown = 0; N.scanning = 0; N.last_scan = 0; memset(N.m, 0, sizeof N.m);
     }
+    { static unsigned long t_cine; static int cine; if (now - t_cine > 700) { t_cine = now; cine = GetFileAttributesA(BUILD "cine_active.txt") != INVALID_FILE_ATTRIBUTES; } if (cine) return; }       /* a cutscene runs on this copy: the NPCs belong to it, nothing is mirrored */
     if (N.off || !a->have_remote || !a->hero) return;
     if (N.scanning || !N.last_scan || now - N.last_scan > 4000) rescan_slice(a);
     N.seat = N.role == 1 ? 0 : 1;

@@ -118,6 +118,7 @@ static uint8_t *ptr_of(const char *t)
     if (strcmp(t, "mesh") == 0) return A->puppet_mesh;
     if (strcmp(t, "world") == 0) return find_world();
     if (t[0] == '$') { for (int i = 0; i < g_nalias; i++) if (strcmp(g_alias[i].name, t + 1) == 0) return g_alias[i].ptr; return NULL; }
+    if (strncmp(t, "cls:", 4) == 0) { char nm[100]; snprintf(nm, sizeof nm, "Default__%s", t + 4); uint8_t *d = A->find_object(NULL, nm, NULL); return d ? A->obj_class(d) : NULL; }          /* the class of the game's class default object, e.g. cls:TESTCinematic */
     if (strncmp(t, "cdo:", 4) == 0) { char nm[100]; snprintf(nm, sizeof nm, "Default__%s", t + 4); return A->find_object(NULL, nm, NULL); }
     return (uint8_t *)(uintptr_t)strtoull(t, NULL, 0);
 }
