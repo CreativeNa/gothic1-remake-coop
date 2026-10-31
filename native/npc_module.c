@@ -26,7 +26,7 @@ typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_
 #pragma pack(pop)
 
 typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1; } Transform;   /* FTransform: FQuat, translation, scale */
-typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int have, dirty, napplied; unsigned long t, topt; } GPose;   /* guest: bone-driven copy of one NPC */
+typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int have, dirty, napplied; unsigned long t, topt, titems; } GPose;   /* guest: bone-driven copy of one NPC */
 typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; uint8_t last[MAXB * 12]; unsigned long next_t; int interval; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
 typedef struct { uint8_t *actor; uint32_t id; } Known;
 typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
@@ -297,11 +297,37 @@ static void tickopt_off(CoreAPI *a, uint8_t *actor)
     a->call_fn(sys, "BFGTickOptimizerSystem", "SetTickOptimizationRuntime_Enabled", 2, names, vals, sizes, NULL, 0);
 }
 
+/* Weapons, quiver, bow ... are separate actors attached to the NPC's original mesh sockets. While the NPC is bone-driven that mesh stays hidden in the animation blueprint's pose, so
+ * the items would float where the NPC used to stand: move every item that hangs on `from` to the same socket of `to` (and back when the bone-driven mesh goes away). */
+static int reparent_items(CoreAPI *a, uint8_t *from, uint8_t *to, uint8_t *owner_actor)
+{
+    int oat = a->find_prop_offset(a->obj_class(from), "AttachChildren"); if (oat < 0) return 0;
+    uint8_t *kids = NULL; int nk = 0; a->read_mem(from + oat, &kids, 8); a->read_mem(from + oat + 8, &nk, 4);
+    if (!kids || nk <= 0 || nk > 100) return 0;
+    uint8_t *list[100]; int n = 0;
+    for (int i = 0; i < nk; i++) { uint8_t *comp = NULL; a->read_mem(kids + (size_t)i * 8, &comp, 8); if (comp && comp != to) list[n++] = comp; }   /* copy first: attaching changes the array */
+    int moved = 0;
+    for (int i = 0; i < n; i++) {
+        uint8_t *comp = list[i], *o = NULL; a->read_mem(comp + 0x20, &o, 8);                 /* a component's outer is its actor */
+        if (!o || o == owner_actor || !a->obj_alive(o, NULL)) continue;
+        if (ptr_prop(a, o, "RootComponent") != comp) continue;                                 /* only whole item actors, not parts of the NPC itself */
+        int os = a->find_prop_offset(a->obj_class(comp), "AttachSocketName"); char sock[96] = "None";
+        if (os >= 0) a->fname_to_str(comp + os, sock, sizeof sock);
+        uint8_t snap = 2, weld = 0; uint8_t *par = to;
+        const char *n3[6] = { "Parent", "SocketName", "LocationRule", "RotationRule", "ScaleRule", "bWeldSimulatedBodies" };
+        const void *v3[6] = { &par, sock, &snap, &snap, &snap, &weld }; int s3[6] = { 8, -1, 1, 1, 1, 1 };
+        a->call_fn(comp, "SceneComponent", "K2_AttachToComponent", 6, n3, v3, s3, NULL, 0);
+        moved++;
+    }
+    return moved;
+}
+
 /* ---- guest: bone-driven NPC (a PoseableMeshComponent with the NPC's own mesh asset, the original mesh hidden) ---- */
 static void gp_drop(CoreAPI *a, Mirror *m)
 {
     if (!m->gp) return;
     GPose *g = m->gp;
+    if (g->comp && a->obj_alive(g->comp, NULL) && g->mesh && a->obj_alive(g->mesh, NULL)) reparent_items(a, g->comp, g->mesh, m->actor);
     if (g->comp && a->obj_alive(g->comp, NULL)) { const char *n[1] = { "Object" }; const void *v[1] = { &g->comp }; int s[1] = { 8 }; a->call_fn(g->comp, "ActorComponent", "K2_DestroyComponent", 1, n, v, s, NULL, 0); }
     if (m->actor && a->obj_alive(m->actor, NULL)) { uint8_t *mesh = ptr_prop(a, m->actor, "Mesh"); if (mesh) set_visible(a, mesh, 1); }
     free(g); m->gp = NULL;
@@ -333,12 +359,15 @@ static int gp_ensure(CoreAPI *a, Mirror *m, GPose *g)
     { int lod0 = 1; const char *nn[1] = { "InNewForcedLOD" }; const void *vv[1] = { &lod0 }; int ss[1] = { 4 }; a->call_fn(comp, "SkinnedMeshComponent", "SetForcedLOD", 1, nn, vv, ss, NULL, 0); }
     set_visible(a, comp, 1); set_visible(a, mesh, 0);
     g->comp = comp; g->mesh = mesh; g->nbn = 0; g->napplied = 0;
+    { int mv = reparent_items(a, mesh, comp, m->actor); if (mv) a->log("N guest: %d item(s) of NPC %p moved to its bone-driven mesh", mv, m->actor); }
     a->log("N guest: NPC %p now bone-driven (poseable %p)", m->actor, comp);
     return 1;
 }
 static void gp_apply(CoreAPI *a, Mirror *m)
 {
-    GPose *g = m->gp; if (!g || !g->dirty || g->bad) return;
+    GPose *g = m->gp; if (!g || g->bad) return;
+    if (g->comp && g->mesh && GetTickCount() - g->titems > 1000) { g->titems = GetTickCount(); if (a->obj_alive(g->comp, NULL) && a->obj_alive(g->mesh, NULL)) { int mv = reparent_items(a, g->mesh, g->comp, m->actor); if (mv) a->log("N guest: %d new item(s) of NPC %p moved to its bone-driven mesh", mv, m->actor); } }
+    if (!g->dirty) return;
     g->dirty = 0;
     if (!gp_ensure(a, m, g)) return;
     if (g->nbn != g->nb) {

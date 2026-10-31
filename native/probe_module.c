@@ -325,6 +325,27 @@ static void run_command(char *line)
         const char *n3[4] = { "Action", "RawValue", "Modifiers", "Triggers" }; const void *v3[4] = { &act, raw, empty, empty }; int s3[4] = { 8, 32, 16, 16 };
         P("inject %s ran: %d", tok[1], A->call_fn(sub, "EnhancedInputSubsystemInterface", "InjectInputForAction", 4, n3, v3, s3, NULL, 0)); return;
     }
+    if (!strcmp(c, "attached") && nt >= 2) {                            /* attached <npc ptr>: components hanging on its mesh (and on a bone-driven poseable child) with the owner actor's world position */
+        uint8_t *npc = ptr_of(tok[1]); if (!live(npc)) { P("not a live object"); return; }
+        double nl[3] = { 0 }; A->call_fn(npc, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, nl, 24); P("npc at %.0f %.0f %.0f", nl[0], nl[1], nl[2]);
+        int om = A->find_prop_offset(A->obj_class(npc), "Mesh"); uint8_t *mesh = NULL; if (om >= 0) A->read_mem(npc + om, &mesh, 8);
+        uint8_t *lists[2] = { mesh, NULL };
+        for (int pass = 0; pass < 2 && lists[pass]; pass++) {
+            int oat = A->find_prop_offset(A->obj_class(lists[pass]), "AttachChildren"); uint8_t *kids = NULL; int nk = 0;
+            if (oat >= 0) { A->read_mem(lists[pass] + oat, &kids, 8); A->read_mem(lists[pass] + oat + 8, &nk, 4); }
+            if (nk < 0 || nk > 60) nk = 0;
+            for (int i = 0; i < nk; i++) {
+                uint8_t *comp = NULL, *o = NULL; A->read_mem(kids + (size_t)i * 8, &comp, 8); if (!comp) continue; A->read_mem(comp + 0x20, &o, 8);
+                char cc[96] = "", oc[96] = "", sock[96] = "-"; A->obj_name(A->obj_class(comp), cc, sizeof cc); if (o) A->obj_name(A->obj_class(o), oc, sizeof oc);
+                int os = A->find_prop_offset(A->obj_class(comp), "AttachSocketName"); if (os >= 0) A->fname_to_str(comp + os, sock, sizeof sock);
+                double ol[3] = { 0 }; if (o && o != npc) A->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, ol, 24);
+                double d = sqrt((ol[0]-nl[0])*(ol[0]-nl[0]) + (ol[1]-nl[1])*(ol[1]-nl[1]) + (ol[2]-nl[2])*(ol[2]-nl[2]));
+                P("  %s child: %s of %s, socket %s, dist to npc %.0f  (z %.0f)", pass ? "poseable" : "mesh", cc, oc, sock, d, ol[2] - nl[2]);
+                if (!pass && strstr(cc, "Poseable") && !lists[1]) lists[1] = comp;
+            }
+        }
+        return;
+    }
     if (!strcmp(c, "npcs")) {                                           /* characters in the world with their class chain and distance to the hero */
         double rad = nt > 1 ? atof(tok[1]) : 3000, hp[3] = {0,0,0}; int max = nt > 2 ? atoi(tok[2]) : 20, shown = 0, total = 0;
         if (A->hero) A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hp, 24);
