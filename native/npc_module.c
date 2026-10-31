@@ -26,7 +26,7 @@ typedef struct { uint32_t id; float x, y, z; int16_t yaw; uint16_t speed; uint8_
 #pragma pack(pop)
 
 typedef struct { double q[4]; double t[3]; double pad0; double s[3]; double pad1; } Transform;   /* FTransform: FQuat, translation, scale */
-typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int have, dirty, napplied; unsigned long t, topt, titems; } GPose;   /* guest: bone-driven copy of one NPC */
+typedef struct { uint8_t *comp, *mesh; int nb, nbn, bad; uint8_t fnm[MAXB][8]; char names[MAXB][48]; uint8_t data[MAXB * 12], applied[MAXB * 12]; int have, dirty, napplied; unsigned long t, topt, titems; uint8_t orig_col; } GPose;   /* guest: bone-driven copy of one NPC */
 typedef struct { uint8_t *actor, *mesh; int nb; uint8_t fnm[MAXB][8]; uint8_t last[MAXB * 12]; unsigned long next_t; int interval; } HPose;                                                                                              /* host: cached bone names of one focus NPC */
 typedef struct { uint8_t *actor; uint32_t id; } Known;
 typedef struct { uint8_t *actor, *ctrl; uint32_t id; Rec want; unsigned long last_seen; int frozen; double cur[3]; int have_cur; int unposs; char anim[320]; GPose *gp; } Mirror;
@@ -329,7 +329,15 @@ static void gp_drop(CoreAPI *a, Mirror *m)
     GPose *g = m->gp;
     if (g->comp && a->obj_alive(g->comp, NULL) && g->mesh && a->obj_alive(g->mesh, NULL)) reparent_items(a, g->comp, g->mesh, m->actor);
     if (g->comp && a->obj_alive(g->comp, NULL)) { const char *n[1] = { "Object" }; const void *v[1] = { &g->comp }; int s[1] = { 8 }; a->call_fn(g->comp, "ActorComponent", "K2_DestroyComponent", 1, n, v, s, NULL, 0); }
-    if (m->actor && a->obj_alive(m->actor, NULL)) { uint8_t *mesh = ptr_prop(a, m->actor, "Mesh"); if (mesh) set_visible(a, mesh, 1); }
+    if (m->actor && a->obj_alive(m->actor, NULL)) {
+        uint8_t *mesh = ptr_prop(a, m->actor, "Mesh");
+        if (mesh) {
+            set_visible(a, mesh, 1);
+            uint8_t col = g->orig_col, ten = 1;
+            { const char *nn[1] = { "NewType" }; const void *vv[1] = { &col }; int ss[1] = { 1 }; a->call_fn(mesh, "PrimitiveComponent", "SetCollisionEnabled", 1, nn, vv, ss, NULL, 0); }
+            { const char *nn[1] = { "bEnabled" }; const void *vv[1] = { &ten }; int ss[1] = { 1 }; a->call_fn(mesh, "ActorComponent", "SetComponentTickEnabled", 1, nn, vv, ss, NULL, 0); }
+        }
+    }
     free(g); m->gp = NULL;
 }
 static int gp_ensure(CoreAPI *a, Mirror *m, GPose *g)
@@ -358,6 +366,13 @@ static int gp_ensure(CoreAPI *a, Mirror *m, GPose *g)
     { const char *nn[1] = { "bInGenerateOverlapEvents" }; const void *vv[1] = { &off }; int ss[1] = { 1 }; a->call_fn(comp, "PrimitiveComponent", "SetGenerateOverlapEvents", 1, nn, vv, ss, NULL, 0); }
     { int lod0 = 1; const char *nn[1] = { "InNewForcedLOD" }; const void *vv[1] = { &lod0 }; int ss[1] = { 4 }; a->call_fn(comp, "SkinnedMeshComponent", "SetForcedLOD", 1, nn, vv, ss, NULL, 0); }
     set_visible(a, comp, 1); set_visible(a, mesh, 0);
+    {   /* the original mesh must not compete with the bone-driven one: no animation tick, no physics (ragdoll), no collision; it only keeps the sockets the items hang on */
+        uint8_t col = 3; a->call_fn(mesh, "PrimitiveComponent", "GetCollisionEnabled", 0, NULL, NULL, NULL, &col, 1); g->orig_col = col;
+        uint8_t no = 0, ten = 0;
+        { const char *nn[1] = { "bSimulate" }; const void *vv[1] = { &no }; int ss[1] = { 1 }; a->call_fn(mesh, "PrimitiveComponent", "SetSimulatePhysics", 1, nn, vv, ss, NULL, 0); }
+        { const char *nn[1] = { "NewType" }; const void *vv[1] = { &no }; int ss[1] = { 1 }; a->call_fn(mesh, "PrimitiveComponent", "SetCollisionEnabled", 1, nn, vv, ss, NULL, 0); }
+        { const char *nn[1] = { "bEnabled" }; const void *vv[1] = { &ten }; int ss[1] = { 1 }; a->call_fn(mesh, "ActorComponent", "SetComponentTickEnabled", 1, nn, vv, ss, NULL, 0); }
+    }
     g->comp = comp; g->mesh = mesh; g->nbn = 0; g->napplied = 0;
     { int mv = reparent_items(a, mesh, comp, m->actor); if (mv) a->log("N guest: %d item(s) of NPC %p moved to its bone-driven mesh", mv, m->actor); }
     a->log("N guest: NPC %p now bone-driven (poseable %p)", m->actor, comp);

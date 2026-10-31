@@ -1,25 +1,25 @@
 # Automated knock-out test (both copies must be running, see harness_start.ps1): the host hero fights Ratford with real game input actions until the
 # game logs "Defeated", then both windows are photographed several times and joined into docs\img\ko_<n>.png (host | guest).
-param([string]$Npc = "Ratford", [int]$MaxAttacks = 14, [int]$GuestDist = 330, [int]$GuestPitch = -35)   # the guest camera: distance behind the host hero and pitch (use -8 and 150 for a low close-up)
+param([string]$Npc = "Ratford", [int]$MaxAttacks = 14, [int]$GuestDist = 330, [int]$GuestPitch = -35, [int]$Attacker = 0)   # -Attacker 1: the GUEST window fights, the host window watches   # the guest camera: distance behind the host hero and pitch (use -8 and 150 for a low close-up)
 $c = Split-Path $PSScriptRoot -Parent
 $dev = Join-Path $c "tools\dev.ps1"; $log = Join-Path $c "native\build\coopdll.log"; $tmp = Join-Path $env:TEMP "g1shots"
 function PidOf($seat) { (Get-CimInstance Win32_Process -Filter "Name='G1R-Win64-Shipping.exe'" | Where-Object { $_.CommandLine -match "-CoopSeat=$seat(\s|$)" } | Select-Object -First 1).ProcessId }
 function Probe($seat, $cmd) { $o = & $dev probe "@$seat $cmd" 2>&1 | Out-String; $id = PidOf $seat; (($o -split "===== game pid ") | Where-Object { $_ -match "^$id" }) -join "`n" }
 function NpcPtr($seat) { ([regex]::Match((Probe $seat "npcs 20000 40"), "([0-9A-F]{16}) Character_[^ ]*$Npc")).Groups[1].Value }
-$hp = PidOf 0; $gp = PidOf 1
-$hn = NpcPtr 0; $gn = NpcPtr 1; if (-not $hn -or -not $gn) { throw "NPC $Npc not found (host '$hn', guest '$gn')" }
-Probe 0 "npchp 0x$hn 6" | Out-Null
-& (Join-Path $c "tools\realclick.ps1") -Seat 0 -Click 0 | Out-Null                       # the game reads input only while its window has the focus
-Probe 0 "tpto 0x$hn hero 170 0 10" | Out-Null; Start-Sleep 1
-Probe 0 "lookat 0x$hn 0 -35" | Out-Null
-Probe 0 "inject IA_Ability_Action_EquipWeaponAuto" | Out-Null; Start-Sleep 3
-Probe 1 "tpto hero puppet $GuestDist 0 10" | Out-Null; Start-Sleep 2
-Probe 1 "lookat 0x$gn 0 $GuestPitch" | Out-Null
+$hp = PidOf $Attacker; $ob = 1 - $Attacker
+$hn = NpcPtr $Attacker; $gn = NpcPtr $ob; if (-not $hn -or -not $gn) { throw "NPC $Npc not found (host '$hn', guest '$gn')" }
+Probe $Attacker "npchp 0x$hn 6" | Out-Null
+& (Join-Path $c "tools\realclick.ps1") -Seat $Attacker -Click 0 | Out-Null                       # the game reads input only while its window has the focus
+Probe $Attacker "tpto 0x$hn hero 170 0 10" | Out-Null; Start-Sleep 1
+Probe $Attacker "lookat 0x$hn 0 -35" | Out-Null
+Probe $Attacker "inject IA_Ability_Action_EquipWeaponAuto" | Out-Null; Start-Sleep 3
+Probe $ob "tpto hero puppet $GuestDist 0 10" | Out-Null; Start-Sleep 2
+Probe $ob "lookat 0x$gn 0 $GuestPitch" | Out-Null
 $mark = (Get-Content $log -ErrorAction SilentlyContinue | Measure-Object -Line).Lines
 $acts = "IA_Combat_Attack_Top", "IA_Combat_Attack_Left", "IA_Combat_Attack_Right", "IA_Combat_Attack_Bottom"
 $down = $false
 for ($i = 0; $i -lt $MaxAttacks -and -not $down; $i++) {
-    Probe 0 "lookat 0x$hn 0 -35" | Out-Null; Probe 0 "inject $($acts[$i % 4])" | Out-Null; Start-Sleep -Milliseconds 900
+    Probe $Attacker "lookat 0x$hn 0 -35" | Out-Null; Probe $Attacker "inject $($acts[$i % 4])" | Out-Null; Start-Sleep -Milliseconds 900
     $down = [bool](Select-String -Path $log -Pattern "^\[$hp\] A local action -> .*Defeated" | Select-Object -Last 1 | Where-Object { $_.LineNumber -gt $mark })
 }
 "knocked out: $down after $($i) attacks"
