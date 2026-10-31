@@ -16,7 +16,7 @@ $flag = Join-Path $c "native\build\scan_fast.txt"; Set-Content $flag "1"        
 function ChestPtr($seat) { [regex]::Match((Probe $seat "ioscan Chest 80"), "([0-9A-F]{16}) Interactive_Chest_Right_Variant_C_UAID_E89C256C6855A5DA02_1705760755").Groups[1].Value }
 function RunOne($from, $to, $label, $itemId) {
     $fromPid = PidOf $from; $toPid = PidOf $to                                        # once: PidOf inside the log filters ran a process query per log line (minutes)
-    $pf = ChestPtr $from; $pt = ChestPtr $to                                    # a chest whose items have the ids 1, 2 and 3 after a fresh start (seen when a player took them)
+    $pf = ""; $pt = ""; for ($w = 0; $w -lt 20 -and -not ($pf -and $pt); $w++) { $pf = ChestPtr $from; $pt = ChestPtr $to; if (-not ($pf -and $pt)) { Start-Sleep 2 } }     # the chest has to be loaded in both copies                                    # a chest whose items have the ids 1, 2 and 3 after a fresh start (seen when a player took them)
     Check "$label setup: the same chest is loaded in both copies" ([bool]($pf -and $pt)) "$pf $pt"
     if (-not ($pf -and $pt)) { return }
     Probe $from "tpto 0x$(Hero $from) 0x$pf 0 -130 40" | Out-Null; Probe $to "tpto 0x$(Hero $to) 0x$pt 0 -130 40" | Out-Null      # both heroes stand in front of the chest

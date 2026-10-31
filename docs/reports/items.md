@@ -1,4 +1,4 @@
-﻿# World item sync 2026-10-31 22:39
+﻿# World item sync 2026-10-31 22:52
 
 8 / 8 checks passed.
 
@@ -6,10 +6,10 @@
 |---|---|---|
 | PASS | host->guest setup: hero next to the item | target at 111866 -101159 -4978 |
 | PASS | host->guest an item is still lying within 450 units of the hero | 0 units |
-| PASS | host->guest the pickup is noticed on the picking copy | [7700] S item BP_ItMi_Stuff_Cup_01_World_C_2147361956 picked up here (id dadcd57f-d3eb250a) |
-| PASS | host->guest the other copy removes the same item | [13968] S item BP_ItMi_Stuff_Cup_01_World_C_2147361956: the other player picked it up (id dadcd57f-d3eb250a) |
+| PASS | host->guest the pickup is noticed on the picking copy | [21472] S item BP_ItMi_Stuff_Cup_01_World_C_2147361544 picked up here (id dadcd57f-d3eb250a) |
+| PASS | host->guest the other copy removes the same item | [16892] S item BP_ItMi_Stuff_Cup_01_World_C_2147361544: the other player picked it up (id dadcd57f-d3eb250a) |
 | PASS | guest->host setup: hero next to the item | target at 111994 -100963 -3667 |
 | PASS | guest->host an item is still lying within 450 units of the hero | 0 units |
-| PASS | guest->host the pickup is noticed on the picking copy | [13968] S item BP_ItMi_Stuff_Cup_01_World_C_2147361952 picked up here (id 70eb4a65-2dd1effc) |
-| PASS | guest->host the other copy removes the same item | [7700] S item BP_ItMi_Stuff_Cup_01_World_C_2147361952: the other player picked it up (id 70eb4a65-2dd1effc) |
+| PASS | guest->host the pickup is noticed on the picking copy | [16892] S item BP_ItMi_Stuff_Cup_01_World_C_2147361540 picked up here (id 70eb4a65-2dd1effc) |
+| PASS | guest->host the other copy removes the same item | [21472] S item BP_ItMi_Stuff_Cup_01_World_C_2147361540: the other player picked it up (id 70eb4a65-2dd1effc) |
 

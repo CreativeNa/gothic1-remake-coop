@@ -2,7 +2,7 @@
 #   test_story.ps1 [-Report story]
 param([string]$Report = "story")
 $c = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$dev = Join-Path $c "tools\dev.ps1"
+$dev = Join-Path $c "tools\dev.ps1"; $log = Join-Path $c "native/build/coopdll.log"
 $results = New-Object System.Collections.ArrayList
 function Check($name, [bool]$ok, $detail = "") { [void]$results.Add([pscustomobject]@{ Check = $name; Result = $(if ($ok) { "PASS" } else { "FAIL" }); Detail = "$detail" }); "{0,-5} {1}  {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), $name, $detail }
 function PidOf($seat) { (Get-CimInstance Win32_Process -Filter "Name='G1R-Win64-Shipping.exe'" | Where-Object { $_.CommandLine -match "-CoopSeat=$seat(\s|$)" } | Select-Object -First 1).ProcessId }
@@ -11,6 +11,12 @@ function Probe($seat, $cmd) { $o = & $dev probe "@$seat $cmd" 2>&1 | Out-String;
 if ((PidOf 0) -and (PidOf 1)) { Restore-Heroes }
 function Ptr($seat, $pattern, $cls) { $m = [regex]::Match((Probe $seat "findall $pattern"), "([0-9A-F]{16}) $cls\S* \(") ; $m.Groups[1].Value }
 function Val($seat, $ptr, $prop) { $m = [regex]::Match((Probe $seat "get 0x$ptr $prop"), "= (-?\d+)\s*$", "Multiline"); if ($m.Success) { [int]$m.Groups[1].Value } else { -999 } }
+$ready = $false                                                               # the first full sync (host -> guest) must be finished, or it overwrites what the test changes
+for ($w = 0; $w -lt 90 -and -not $ready; $w++) {
+    $all = Get-Content $log; $p0 = PidOf 0; $p1 = PidOf 1
+    $ready = (@($all | Where-Object { $_ -match "^\[$p0\] S role host: .*pending no" }).Count -ge 1) -and (@($all | Where-Object { $_ -match "^\[$p1\] S role guest: .*applied [1-9]\d* words" }).Count -ge 1)
+    if (-not $ready) { Start-Sleep 1 }
+}
 $sh = Ptr 0 "StoryG1R" "StoryG1R_"; $sg = Ptr 1 "StoryG1R" "StoryG1R_"
 $qn = "Instance_Quest_BanditsCamp_BANDITSTRUST_BANDITSTRUST_OBJ_BACK"
 $qh = Ptr 0 "BANDITSTRUST_OBJ_BACK" "Instance_Quest"; $qg = Ptr 1 "BANDITSTRUST_OBJ_BACK" "Instance_Quest"
