@@ -179,19 +179,15 @@ static int read_pose(CoreAPI *a, uint8_t *actor, uint8_t *out, int *nb_out, int1
             if (*nsp < 160) { sp[*nsp][0] = (int16_t)i; sp[*nsp][1] = q16(tr.s[0], 1000); sp[*nsp][2] = q16(tr.s[1], 1000); sp[*nsp][3] = q16(tr.s[2], 1000); (*nsp)++; }
         }
     }
-    {   /* diagnostics (once per NPC): bones that came back empty, the bone count and the first non-trivial scales */
-        static uint8_t *seen[16]; static int ns; (void)seen; int already = 0; for (int q = 0; q < ns; q++) if (seen[q] == actor) already = 1;
-        if (!already && ns < 16) {
-            seen[ns++] = actor; int zero = 0; char first[400] = "";
-            for (int i = 1; i < h->nb; i++) { int16_t *v = (int16_t *)(out + i * 12); if (!(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) { zero++; if (strlen(first) < 300) { char nm[64]; a->fname_to_str(h->fnm[i], nm, sizeof nm); if (strncmp(nm, "face_", 5) != 0) { strcat(first, nm); strcat(first, " "); } } } }
-            char an[160]; a->obj_name(actor, an, sizeof an);
+    {   /* diagnostics: log an NPC whenever the number of bones the host could not report changes (the level of detail switches with the distance to a player) */
+        static uint8_t *seen[16]; static int lastz[16]; static int ns;
+        int zero = 0; char first[400] = "";
+        for (int i = 1; i < h->nb; i++) { int16_t *v = (int16_t *)(out + i * 12); if (!(v[0] | v[1] | v[2] | v[3] | v[4] | v[5])) { zero++; if (strlen(first) < 300) { char nm[64]; a->fname_to_str(h->fnm[i], nm, sizeof nm); if (strncmp(nm, "face_", 5) != 0) { strcat(first, nm); strcat(first, " "); } } } }
+        int idx = -1; for (int q = 0; q < ns; q++) if (seen[q] == actor) idx = q;
+        if (idx < 0 && ns < 16) { idx = ns++; seen[idx] = actor; lastz[idx] = -1; }
+        if (idx >= 0 && lastz[idx] != zero) {
+            lastz[idx] = zero; char an[160]; a->obj_name(actor, an, sizeof an);
             a->log("N host: pose of %s: %d bones, %d empty (%s), %d scaled bones", an, h->nb, zero, first, *nsp);
-            for (int i = 1; i < h->nb; i++) {
-                char nm[64]; a->fname_to_str(h->fnm[i], nm, sizeof nm);
-                if (strcmp(nm, "head") && strcmp(nm, "Head") && strcmp(nm, "neck_01") && strcmp(nm, "neck_02") && strcmp(nm, "spine_05") && strcmp(nm, "clavicle_l") && strcmp(nm, "pelvis") && strcmp(nm, "upperarm_l") && strcmp(nm, "face_C_skull")) continue;
-                int16_t *v = (int16_t *)(out + i * 12); double q0 = v[0] / 32767.0, q1 = v[1] / 32767.0, q2 = v[2] / 32767.0;
-                a->log("N host:   bone #%d %s  quat %.2f %.2f %.2f  loc %.1f %.1f %.1f", i, nm, q0, q1, q2, v[3] / 50.0, v[4] / 50.0, v[5] / 50.0);
-            }
         }
     }
     *nb_out = h->nb; return 1;
@@ -206,6 +202,11 @@ static void pick_focus(CoreAPI *a, const double *c1, int have2, const double *c2
         double d1 = sqrt((p[0] - c1[0]) * (p[0] - c1[0]) + (p[1] - c1[1]) * (p[1] - c1[1]) + (p[2] - c1[2]) * (p[2] - c1[2]));
         double d2 = have2 ? sqrt((p[0] - c2[0]) * (p[0] - c2[0]) + (p[1] - c2[1]) * (p[1] - c2[1]) + (p[2] - c2[2]) * (p[2] - c2[2])) : 1e18;
         double d = d1 < d2 ? d1 : d2; if (d > FOCUS_R) continue;
+        {   /* bone-driven copying only for NPCs that are defeated (lying, knocked out): a clip cannot show that pose. Everyone else keeps the normal mesh and animation: the bone-driven mesh of an NPC
+             * that is sitting, standing or walking showed stretched arms and heads once a player came close. */
+            uint8_t df = 0; a->call_fn(o, "GothicCharacter", "IsDefeated", 0, NULL, NULL, NULL, &df, 1);
+            if (!df) continue;
+        }
         int pos = N.nfocus; while (pos > 0 && best[pos - 1] > d) pos--;
         if (pos >= NFOCUS) continue;
         for (int k = (N.nfocus < NFOCUS ? N.nfocus : NFOCUS - 1); k > pos; k--) { best[k] = best[k - 1]; N.focus[k] = N.focus[k - 1]; }
@@ -348,6 +349,11 @@ static int npc_skip_has(const char *name)
 {
     unsigned long now = GetTickCount();
     if (now - skip_t > 1500) { skip_t = now; SKIP[0] = 0; FILE *f = fopen(BUILD "npc_skip.txt", "r"); if (f) { if (fgets(SKIP, sizeof SKIP, f)) { char *e = SKIP + strlen(SKIP); while (e > SKIP && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0; } fclose(f); } }
+    {   /* Bones that only exist in the close-up level of detail (face, eyes, jaw, armour plates, ribs, scapula, radius twist, belt, bags): the host sends them only while a player stands near the NPC, and applied in component space they pull the skin into spikes.
+         * They stay in the reference pose, exactly like the same bones of the hero puppet. */
+        static const char *def[] = { "face_", "eye_", "Jaw", "tongue", "helmet", "radius_", "scapula_", "shoulderguard", "lowerarmarmor", "chestpiece", "rib_", "belt_", "bag_", "teeth", "brow", "lip" };
+        for (size_t k = 0; k < sizeof def / sizeof def[0]; k++) if (strstr(name, def[k])) return 1;
+    }
     if (!SKIP[0]) return 0;
     char tmp[300]; snprintf(tmp, sizeof tmp, "%s", SKIP);
     for (char *t = strtok(tmp, ","); t; t = strtok(NULL, ",")) if (*t && strstr(name, t)) return 1;
@@ -536,7 +542,7 @@ static void guest_tick(CoreAPI *a, unsigned long now)
         if (!m->actor || !a->obj_alive(m->actor, NULL)) { m->frozen = 0; continue; }
         if (!m->frozen) continue;
         if (m->gp) {
-            if (now - m->gp->t > 8000) { gp_drop(a, m); set_anim(a, m); }          /* no longer one of the host's focus NPCs: the original mesh and its animation come back */
+            if (now - m->gp->t > 5000) { gp_drop(a, m); set_anim(a, m); }          /* no longer one of the host's focus NPCs: the original mesh and its animation come back */
             else { if (now - m->gp->topt > 3000) { m->gp->topt = now; tickopt_off(a, m->actor); } gp_apply(a, m); }
         }
         if (now - m->last_seen > 5000) { release(a, m); continue; }              /* the host no longer reports it (far away): give the AI back */
