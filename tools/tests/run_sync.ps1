@@ -11,7 +11,7 @@ if ($Start) {
     Start-Sleep 60                                                           # modules start, the world settles
 }
 $bad = 0
-foreach ($t in "story", "items", "chests", "loot", "bodyloot") {
+foreach ($t in "story", "items", "loot", "bodyloot", "chests") {
     "=== $t"
     & (Join-Path $PSScriptRoot "test_$t.ps1") 2>&1 | Where-Object { $_ -match "PASS|FAIL|checks passed|Error" }
     if ($LASTEXITCODE -ne 0) { $bad++ }

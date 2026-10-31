@@ -398,6 +398,14 @@ static void set_anim(CoreAPI *a, Mirror *m)
     int have = 0, others = 0;
     for (int i = 0; i < n; i++) { if (mont_dynamic(a, ms[i])) continue; char cn[120]; a->obj_name(ms[i], cn, sizeof cn); if (!strcmp(cn, nm)) have = 1; else others = 1; }
     if (have && !others) return;                                               /* exactly the owner's montage is playing */
+    if (have && others) {                                                      /* the owner's montage plays, but the mirror's own AI started another body montage next to it: stop only that one (restarting ours every 0.7 s made it flicker) */
+        for (int i = 0; i < n; i++) {
+            if (mont_dynamic(a, ms[i])) continue; char cn[120]; a->obj_name(ms[i], cn, sizeof cn); if (!strcmp(cn, nm)) continue;
+            float blend = 0.2f; uint8_t *mo2 = ms[i]; const char *nn[2] = { "InBlendOutTime", "Montage" }; const void *v[2] = { &blend, &mo2 }; int sz[2] = { 4, 8 };
+            a->call_fn(ai, "AnimInstance", "Montage_Stop", 2, nn, v, sz, NULL, 0);
+        }
+        return;
+    }
     if (m->anim_fail >= 3) return;
     uint8_t *mo = a->clip_by_name(nm, pk);
     if (!mo) { m->anim_fail++; a->log("N guest: montage %s not found (pkg %s)", nm, pk); return; }

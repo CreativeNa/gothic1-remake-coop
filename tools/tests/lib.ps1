@@ -1,7 +1,11 @@
 # Shared helpers for the sync tests (dot-source it after defining Probe): puts both heroes back where they started, so the tests can run back to back.
 #   Restore-Heroes      the first call after a fresh start records both hero positions in native\build\test_spawn.txt (harness_start.ps1 deletes the file);
 #                       later calls teleport a hero that is more than 800 units away from its recorded position back and give the world time to settle
+function Set-TestSafety {                                                     # NPCs ignore the heroes (the game's own "Invisible" cheat, Gothic.IgnorePlayerPerceptions): taking things from chests in front of guards must not get a hero killed; per process, nothing is saved
+    foreach ($s in 0, 1) { Probe $s "cc Gothic.IgnorePlayerPerceptions 1" | Out-Null }
+}
 function Restore-Heroes {
+    Set-TestSafety
     $c = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
     $f = Join-Path $c "native\build\test_spawn.txt"
     $pos = @{}
