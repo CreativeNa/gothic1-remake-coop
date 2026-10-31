@@ -33,7 +33,7 @@ static const struct { const char *key, *cult; const wchar_t *label; } LANG[] = {
 static struct {
     uint8_t *menu, *box, *btn, *label; uint32_t menu_fn[2];
     unsigned long last_find, last_tick; int created, tries, was_pressed, lang; char cur_lang[16];
-    int clicks;
+    int clicks, fn_bad;
 } M;
 
 __declspec(dllexport) void mod_init(CoreAPI *a) { (void)a; memset(&M, 0, sizeof M); M.lang = -1; }
@@ -86,8 +86,9 @@ static uint8_t *find_menu(CoreAPI *a)
 {
     uint8_t *d = a->find_object(NULL, "Default__W_MainMenu_C", NULL); uint8_t *k = d ? a->obj_class(d) : NULL; if (!k) return NULL;
     int n = a->num_objects();
-    for (int i = 0; i < n; i++) { uint8_t *o = a->object_at(i); if (o && o != d && a->obj_class(o) == k) return o; }
-    return NULL;
+    uint8_t *last = NULL;                                          /* after a trip into the game and back an older menu object can still exist: the newest one (highest index) is the live one */
+    for (int i = 0; i < n; i++) { uint8_t *o = a->object_at(i); if (o && o != d && a->obj_class(o) == k) last = o; }
+    return last;
 }
 
 static void create_button(CoreAPI *a)
@@ -132,7 +133,8 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
 {
     unsigned long now = GetTickCount();
     if (GetFileAttributesA(BUILD "menu_off.txt") != INVALID_FILE_ATTRIBUTES) return;
-    if (M.menu && !same_obj(a, M.menu, M.menu_fn)) { M.menu = M.btn = M.label = M.box = NULL; M.created = 0; M.tries = 0; M.was_pressed = 0; }
+    if (M.menu) { static unsigned long t_chk; if (now - t_chk > 1500) { t_chk = now; uint8_t *nw = find_menu(a); if (nw && nw != M.menu) { a->log("MENU: a newer menu object appeared"); M.fn_bad = 1; } } }
+    if (M.fn_bad || (M.menu && !same_obj(a, M.menu, M.menu_fn))) { M.fn_bad = 0; M.menu = M.btn = M.label = M.box = NULL; M.created = 0; M.tries = 0; M.was_pressed = 0; }
     if (!M.menu) {
         if (now - M.last_find < 1500) return; M.last_find = now;
         M.menu = find_menu(a); if (!M.menu) return;
