@@ -257,3 +257,11 @@ Last results with a clean start of both (lite) copies: story 6/6, chests 8/8, it
 Not verified: the NPC montage sync by eye; a chest take made by hand through the UI after the leak fix; behaviour with real players over a network.
 
 **Note:** the NPC animation sync, the loot / chest / item / story sync and the leak fix were verified only by scripts and numbers, not in the real game by a person playing. They need live testing.
+
+## Addendum 9: loot of bodies (NPC inventories)
+
+- An NPC's inventory is a `DataModule_Container` inside its **PlayerState** (`PlayerState.DataModuleComponent.m_DataModules`), the same class as a chest's container. The story module now also tracks characters (class with `PlayerState` and `m_CarryComponent`) within 3500 units of its hero; the key is the FNV hash of the instance name (stable and equal in both copies). A `Server_ConsumeItem` the game makes on such a module is sent and replayed on the same NPC in the other copy, exactly like a chest take (de-duplicated, acknowledged, no echo). Only loot calls are replayed for NPCs (no "emptied" detection).
+- Probe commands: `npcinv <npc>`, `bodylist [radius] [max]` (NPCs that have a container module, one call).
+- Test `tools\tests\test_bodyloot.ps1` (added to `run_sync.ps1`): picks the NPC nearest to the hero that exists in both copies, waits until both track it, takes item ids 1..5 through the probe until one is replayed `ok`; 10/10 on its first run. In the full run that followed, story 6/6 and items 8/8 passed; the run was then stopped by the watchdog (available RAM) before chests / loot / bodyloot finished.
+- **Memory margin:** with a browser (~3 GB) and the Claude app (~2.7 GB) open, the two game copies leave almost nothing at the moment the second copy loads its save (available RAM fell to 450-610 MB, the watchdog stopped the run). Close the browser during test runs. The watchdog limit is now 600 MB. This is a property of the PC (32 GB), not a new leak: idle and under all modules the copies stay flat.
+- Not verified in the real game (only scripts): body loot replay, as with everything else here.

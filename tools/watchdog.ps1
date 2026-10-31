@@ -3,7 +3,7 @@
 #  - if AVAILABLE RAM (free + reclaimable cache) falls under -MinFreeMB, or the CPU stays above -CpuPct for -CpuSeconds, or the run lasts longer than -MaxMinutes,
 #    the game copies and the test scripts are stopped and the reason is written to native\build\watchdog.log
 # harness_start.ps1 starts it by default (hidden); it ends by itself when no game is running any more.
-param([int]$MinFreeMB = 800, [int]$CpuPct = 97, [int]$CpuSeconds = 25, [int]$MaxMinutes = 60)
+param([int]$MinFreeMB = 600, [int]$CpuPct = 97, [int]$CpuSeconds = 25, [int]$MaxMinutes = 60)
 $c = Split-Path $PSScriptRoot -Parent
 $log = Join-Path $c "native/build/watchdog.log"
 function Log($m) { "{0:HH:mm:ss} {1}" -f (Get-Date), $m | Add-Content $log }

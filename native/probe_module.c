@@ -532,6 +532,36 @@ static void run_command(char *line)
         }
         P("%d chests listed", shown); return;
     }
+    if (!strcmp(c, "npcinv") && nt >= 2) {                               /* npcinv <npc ptr>: the container module of an NPC (PlayerState.DataModuleComponent -> DataModule_Container) and its list lengths */
+        uint8_t *npc = ptr_of(tok[1]); if (!live(npc)) { P("not a live object"); return; }
+        int ops = A->find_prop_offset(A->obj_class(npc), "PlayerState"); uint8_t *ps = NULL; if (ops >= 0) A->read_mem(npc + ops, &ps, 8);
+        uint8_t *dc = A->find_object(NULL, "Default__DataModule_Container", NULL); uint8_t *kc = dc ? A->obj_class(dc) : NULL;
+        int oc = ps ? A->find_prop_offset(A->obj_class(ps), "DataModuleComponent") : -1; uint8_t *comp = NULL; if (oc >= 0) A->read_mem(ps + oc, &comp, 8);
+        int oa = comp ? A->find_prop_offset(A->obj_class(comp), "m_DataModules") : -1; uint8_t *arr = NULL; int num = 0;
+        if (oa >= 0) { A->read_mem(comp + oa, &arr, 8); A->read_mem(comp + oa + 8, &num, 4); }
+        P("playerstate %p component %p modules %d", ps, comp, num);
+        for (int e = 0; arr && e < num && e < 32; e++) { uint8_t *m = NULL; A->read_mem(arr + (size_t)e * 8, &m, 8); if (!m) continue; char cn[100]; A->obj_name(A->obj_class(m), cn, sizeof cn);
+            if (m && A->obj_class(m) == kc) { int oi = A->find_prop_offset(kc, "m_Inventory"), n0 = 0, n1 = 0; A->read_mem(m + oi + 8, &n0, 4); A->read_mem(m + oi + 24, &n1, 4); P("  container %p: %d + %d items", m, n0, n1); }
+            else P("  module %p (%s)", m, cn); }
+        return;
+    }
+    if (!strcmp(c, "bodylist")) {                                        /* bodylist [radius] [max]: NPCs that have a container module (lootable inventory), one call: BODY ptr name module pos */
+        double rad = nt > 1 ? atof(tok[1]) : 3500, hp[3] = {0,0,0}; int max = nt > 2 ? atoi(tok[2]) : 60, shown = 0, n = A->num_objects(); char nm[160];
+        if (A->hero) A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hp, 24);
+        uint8_t *dc = A->find_object(NULL, "Default__DataModule_Container", NULL); uint8_t *kc = dc ? A->obj_class(dc) : NULL; if (!kc) { P("no container class"); return; }
+        for (int i = 0; i < n && shown < max; i++) {
+            uint8_t *o = A->object_at(i); if (!o || o == A->hero || o == A->puppet) continue; uint8_t *k = A->obj_class(o);
+            int ops = A->find_prop_offset(k, "PlayerState"); if (ops < 0 || A->find_prop_offset(k, "m_CarryComponent") < 0) continue;
+            A->obj_name(o, nm, sizeof nm); if (!strncmp(nm, "Default__", 9) || A->read_bool(o, "bActorIsBeingDestroyed") == 1) continue;
+            uint8_t *ps = NULL; A->read_mem(o + ops, &ps, 8); if (!ps) continue; int oc = A->find_prop_offset(A->obj_class(ps), "DataModuleComponent"); uint8_t *comp = NULL; if (oc >= 0) A->read_mem(ps + oc, &comp, 8); if (!comp) continue;
+            int oa = A->find_prop_offset(A->obj_class(comp), "m_DataModules"); uint8_t *arr = NULL; int num = 0; if (oa >= 0) { A->read_mem(comp + oa, &arr, 8); A->read_mem(comp + oa + 8, &num, 4); }
+            uint8_t *mod = NULL; for (int e = 0; arr && e < num && e < 32; e++) { uint8_t *m = NULL; A->read_mem(arr + (size_t)e * 8, &m, 8); if (m && A->obj_class(m) == kc) { mod = m; break; } }
+            if (!mod) continue; double lp[3] = {0,0,0}; if (!A->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, lp, 24)) continue;
+            double dd = sqrt((lp[0]-hp[0])*(lp[0]-hp[0]) + (lp[1]-hp[1])*(lp[1]-hp[1])); if (dd > rad) continue;
+            shown++; P("BODY %p %s module %p pos %.0f %.0f %.0f", o, nm, mod, lp[0], lp[1], lp[2]);
+        }
+        P("%d bodies listed", shown); return;
+    }
     if (!strcmp(c, "heroinfo")) {                                        /* heroinfo: the hero's position (to put it back after a test) */
         double l[3] = { 0 }; if (!A->hero || !A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, l, 24)) { P("HEROINFO none"); return; }
         P("HEROINFO pos %.0f %.0f %.0f", l[0], l[1], l[2]); return;

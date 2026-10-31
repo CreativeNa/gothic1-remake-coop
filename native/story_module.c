@@ -161,6 +161,7 @@ static int cls_has_item(CoreAPI *a, uint8_t *k, int *idoff)
         if (a->find_prop_offset(k, "m_WorldItemDefinition") >= 0) { has = 1; char pn[96]; a->obj_name(k, pn, sizeof pn); for (char *c = pn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32; if (strstr(pn, "pouch")) has = 0; }          /* loot pouches: the game creates and removes them by itself all the time, they are not pickups */
         else if (a->find_prop_offset(k, "m_DataModuleComponent") >= 0) { char cn[96]; a->obj_name(k, cn, sizeof cn); for (char *c = cn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32; if (strstr(cn, "chest")) has = 2; }
     }
+    if (!has && a->find_prop_offset(k, "m_CarryComponent") >= 0 && a->find_prop_offset(k, "PlayerState") >= 0) has = 4;          /* NPCs: their inventory is a DataModule_Container in the PlayerState (bodies can be looted) */
     if (!has) { char cn[96]; a->obj_name(k, cn, sizeof cn); for (char *c = cn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32;
         if (strstr(cn, "pidgeon_bp") || strstr(cn, "crow_bp") || strstr(cn, "ambientlifewarningflock")) has = 3; }          /* ambient birds: their audio emitters crash the game (fmod, exe+0x5be3977) */
     unsigned w = (unsigned)(((uintptr_t)k >> 4) * 2654435761u) & (CLS_TAB - 1);
@@ -172,6 +173,16 @@ static uint8_t *chest_module(CoreAPI *a, uint8_t *actor)
 {
     if (!S.cls_cont) { uint8_t *d = a->find_object(NULL, "Default__DataModule_Container", NULL); if (d) S.cls_cont = a->obj_class(d); }
     int oc = a->find_prop_offset(a->obj_class(actor), "m_DataModuleComponent"); uint8_t *comp = NULL; if (oc < 0 || !a->read_mem(actor + oc, &comp, 8) || !comp) return NULL;
+    int oa = a->find_prop_offset(a->obj_class(comp), "m_DataModules"); uint8_t *arr = NULL; int num = 0;
+    if (oa < 0 || !a->read_mem(comp + oa, &arr, 8) || !a->read_mem(comp + oa + 8, &num, 4) || !arr || num <= 0 || num > 32) return NULL;
+    for (int i = 0; i < num; i++) { uint8_t *m = NULL; if (a->read_mem(arr + (size_t)i * 8, &m, 8) && m && a->obj_class(m) == S.cls_cont) return m; }
+    return NULL;
+}
+static uint8_t *body_module(CoreAPI *a, uint8_t *npc)
+{
+    if (!S.cls_cont) { uint8_t *d = a->find_object(NULL, "Default__DataModule_Container", NULL); if (d) S.cls_cont = a->obj_class(d); }
+    int ops = a->find_prop_offset(a->obj_class(npc), "PlayerState"); uint8_t *ps = NULL; if (ops < 0 || !a->read_mem(npc + ops, &ps, 8) || !ps) return NULL;
+    int oc = a->find_prop_offset(a->obj_class(ps), "DataModuleComponent"); uint8_t *comp = NULL; if (oc < 0 || !a->read_mem(ps + oc, &comp, 8) || !comp) return NULL;
     int oa = a->find_prop_offset(a->obj_class(comp), "m_DataModules"); uint8_t *arr = NULL; int num = 0;
     if (oa < 0 || !a->read_mem(comp + oa, &arr, 8) || !a->read_mem(comp + oa + 8, &num, 4) || !arr || num <= 0 || num > 32) return NULL;
     for (int i = 0; i < num; i++) { uint8_t *m = NULL; if (a->read_mem(arr + (size_t)i * 8, &m, 8) && m && a->obj_class(m) == S.cls_cont) return m; }
@@ -218,6 +229,20 @@ static void scan_items(CoreAPI *a, double *hp)
             char bn[96]; a->obj_name(o, bn, sizeof bn); if (!strncmp(bn, "Default__", 9)) continue;
             a->destroy_actor(o); S.n_birds++; if (S.n_birds <= 5 || S.n_birds % 50 == 0) a->log("S ambient bird/flock removed: %s (%d so far)", bn, S.n_birds); continue;
         }
+        if (kind == 4) {                                                                           /* a character whose inventory can be looted: tracked like a chest (only the loot calls are replayed) */
+            if (S.nit >= MAXI || far_skip(o, tnow)) continue;
+            int knownb = 0; for (int j = 0; j < S.nit; j++) if (S.it[j].ptr == o) { knownb = 1; break; } if (knownb) continue;
+            uint32_t fl = 0; a->read_mem(o + 8, &fl, 4); if ((fl & 0x8000) || a->read_bool(o, "bActorIsBeingDestroyed") == 1) continue;
+            char bn[96]; a->obj_name(o, bn, sizeof bn); if (!strncmp(bn, "Default__", 9)) continue;
+            double bp[3]; if (!loc_of(a, o, bp)) continue; double bx = bp[0] - hp[0], by = bp[1] - hp[1];
+            if (bx * bx + by * by > 3500.0 * 3500.0) { far_set(o, tnow + (S.fast_scan ? 4000 : 12000)); continue; }
+            uint8_t *bm = body_module(a, o); if (!bm) { far_set(o, tnow + 20000); continue; }
+            It *t = &S.it[S.nit]; memset(t, 0, sizeof *t); t->ptr = o; t->chest = 2; t->mod = bm; snprintf(t->name, sizeof t->name, "%s", bn); a->read_mem(o + 0x18, t->fname, 8);
+            uint32_t h1 = fnv(bn); memcpy(t->id, &h1, 4); t->id[15] = 0xB7;                                   /* the instance name is stable and the same in both copies */
+            for (int k = 0; k < S.nlootpend; ) { if (!memcmp(S.lootpend[k].id, t->id, 16)) { loot_apply(a, t, S.lootpend[k].type, S.lootpend[k].item, S.lootpend[k].amount); S.lootpend[k] = S.lootpend[--S.nlootpend]; } else k++; }
+            a->log("S body tracked: %s", bn);
+            S.nit++; continue;
+        }
         if (idoff < 0) continue;
         if (far_skip(o, tnow)) continue;
         int known = 0; for (int j = 0; j < S.nit; j++) if (S.it[j].ptr == o) { known = 1; break; }
@@ -255,6 +280,7 @@ static void check_items(CoreAPI *a, double *hp)
         It *t = &S.it[j]; int dead = !same_obj(a, t->ptr, t->fname);
         if (!dead) { uint32_t fl = 0; a->read_mem(t->ptr + 8, &fl, 4); if (fl & 0x8000) dead = 1; }               /* RF_BeginDestroyed */
         if (!dead && a->read_bool(t->ptr, "bActorIsBeingDestroyed") == 1) dead = 1;                  /* Destroy() was called, the object waits for the garbage collector */
+        if (!dead && t->chest == 2) { loc_of(a, t->ptr, t->pos); j++; continue; }                     /* a character: only the loot calls matter */
         if (!dead && t->chest) {
             int cnt = chest_count(a, t->mod); double dx = t->pos[0] - hp[0], dy = t->pos[1] - hp[1];
             if (cnt == 0 && t->base > 0 && dx * dx + dy * dy < 2500.0 * 2500.0 && S.ngone < 128 && !is_removed(t->id)) {          /* this hero emptied it */
