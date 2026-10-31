@@ -64,3 +64,9 @@ Last updated: 2026-10-30
 - The core's `obj_alive(ptr, name)` mis-reports objects that differ only by the number suffix of their name (the cache is per FName index); the module checks identity on the raw FName instead. Other modules still use the old call.
 - Test: `tools	ests	est_items.ps1` (8 checks, both directions).
 - NOT done: chests and bodies (contents are in the actor's DataModuleComponent, not examined), items dropped by a player, trading, each hero keeps its own inventory. Not tried: a real pickup by interaction (the test destroys the actor, which is what a pickup should do; not verified).
+
+## Chests and ambient birds (2026-10-31)
+- Chests: a chest emptied next to one hero is emptied in the other copy (the container module's two item lists get length 0; the game's own `Server_Debug_EmptyInventory` faults without authority). Partial looting (taking one item of several) is NOT synced. Bodies are not done.
+- Test: `tools	ests	est_chests.ps1` passed 6/6 right after a restart. Run back to back with the story and item tests (heroes left far from the start by the previous test) it fails: the tests need a clean restart or a "heroes back to the start" step. Not fixed.
+- Ambient birds (`Pidgeon_bp`, `Crow_bp`, `AmbientLifeWarningFlock`) are destroyed by the story module (`native/build/ambient_keep.txt` keeps them): three crashes at exe+0x5be3977 had their audio emitters in the stack. Whether this removes the crash is not verified.
+- The PC froze during the last long test run (two game copies, ~32 GB RAM); the run's result is unknown.

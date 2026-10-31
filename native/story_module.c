@@ -18,7 +18,7 @@
 #define MAXQ 1024
 
 #define MAXI 400
-typedef struct { uint8_t *ptr; char name[96]; uint8_t id[16]; double pos[3]; uint32_t fname[2]; } It;
+typedef struct { uint8_t *ptr; char name[96]; uint8_t id[16]; double pos[3]; uint32_t fname[2]; int chest; uint8_t *mod; int base; } It;
 typedef struct { uint8_t id[16]; unsigned sent; } Gone;
 typedef struct { uint32_t id; uint8_t *ptr; uint8_t base, cur, sentv; int pend; unsigned sent; } Q;
 
@@ -36,7 +36,7 @@ static struct {
     int hist[256]; int histlogged;
     /* world items: picked up here -> removed there (matched by the persistent id every placed actor has) */
     It it[MAXI]; int nit; Gone gone[128]; int ngone; uint8_t removed[2048][16]; int nremoved;
-    uint8_t *cls_ok[300]; uint8_t cls_has[300]; int ncls; int it_off_cache; int isc_pos; int n_pick_sent, n_pick_applied;
+    uint8_t *cls_cont; int keep_birds, n_birds; int n_chest_sent, n_chest_applied; uint8_t *cls_ok[300]; uint8_t cls_has[300]; int ncls; int it_off_cache; int isc_pos; int n_pick_sent, n_pick_applied;
 } S;
 
 __declspec(dllexport) void mod_init(CoreAPI *a) { (void)a; memset(&S, 0, sizeof S); }
@@ -140,13 +140,43 @@ static int write_state(CoreAPI *a, Q *q, uint8_t st, int bulk)
 
 static int cls_has_item(CoreAPI *a, uint8_t *k, int *idoff)
 {
-    for (int i = 0; i < S.ncls; i++) if (S.cls_ok[i] == k) { if (S.cls_has[i]) *idoff = a->find_prop_offset(k, "m_PersistentId"); return S.cls_has[i]; }
-    int has = a->find_prop_offset(k, "m_WorldItemDefinition") >= 0 && a->find_prop_offset(k, "m_PersistentId") >= 0;
+    for (int i = 0; i < S.ncls; i++) if (S.cls_ok[i] == k) { if (S.cls_has[i] == 1 || S.cls_has[i] == 2) *idoff = a->find_prop_offset(k, "m_PersistentId"); return S.cls_has[i]; }
+    int has = 0;
+    { char cn[96]; a->obj_name(k, cn, sizeof cn); for (char *c = cn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32;
+      if (strstr(cn, "pidgeon_bp") || strstr(cn, "crow_bp") || strstr(cn, "ambientlifewarningflock")) has = 3; }          /* ambient birds: their audio emitters crash the game (fmod, exe+0x5be3977) */
+    if (!has && a->find_prop_offset(k, "m_PersistentId") >= 0) {
+        if (a->find_prop_offset(k, "m_WorldItemDefinition") >= 0) has = 1;
+        else if (a->find_prop_offset(k, "m_DataModuleComponent") >= 0) { char cn[96]; a->obj_name(k, cn, sizeof cn); for (char *c = cn; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32; if (strstr(cn, "chest")) has = 2; }
+    }
     if (S.ncls < 300) { S.cls_ok[S.ncls] = k; S.cls_has[S.ncls] = (uint8_t)has; S.ncls++; }
-    if (has) *idoff = a->find_prop_offset(k, "m_PersistentId");
+    if (has == 1 || has == 2) *idoff = a->find_prop_offset(k, "m_PersistentId");
     return has;
 }
 static int loc_of(CoreAPI *a, uint8_t *o, double *v) { double r[3] = { 0, 0, 0 }; if (!a->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, r, 24)) return 0; v[0] = r[0]; v[1] = r[1]; v[2] = r[2]; return 1; }
+static uint8_t *chest_module(CoreAPI *a, uint8_t *actor)
+{
+    if (!S.cls_cont) { uint8_t *d = a->find_object(NULL, "Default__DataModule_Container", NULL); if (d) S.cls_cont = a->obj_class(d); }
+    int oc = a->find_prop_offset(a->obj_class(actor), "m_DataModuleComponent"); uint8_t *comp = NULL; if (oc < 0 || !a->read_mem(actor + oc, &comp, 8) || !comp) return NULL;
+    int oa = a->find_prop_offset(a->obj_class(comp), "m_DataModules"); uint8_t *arr = NULL; int num = 0;
+    if (oa < 0 || !a->read_mem(comp + oa, &arr, 8) || !a->read_mem(comp + oa + 8, &num, 4) || !arr || num <= 0 || num > 32) return NULL;
+    for (int i = 0; i < num; i++) { uint8_t *m = NULL; if (a->read_mem(arr + (size_t)i * 8, &m, 8) && m && a->obj_class(m) == S.cls_cont) return m; }
+    return NULL;
+}
+static int chest_count(CoreAPI *a, uint8_t *mod)
+{
+    int oi = a->find_prop_offset(S.cls_cont, "m_Inventory"); int n0 = 0, n1 = 0;
+    if (oi < 0 || !a->read_mem(mod + oi + 8, &n0, 4) || !a->read_mem(mod + oi + 24, &n1, 4)) return -1;
+    if (n0 < 0 || n1 < 0 || n0 > 10000 || n1 > 10000) return -1;
+    return n0 + n1;
+}
+static void chest_empty(CoreAPI *a, It *t)
+{
+    if (t->mod) {
+        int oi = a->find_prop_offset(S.cls_cont, "m_Inventory"), z = 0;                    /* the game's own Server_Debug_EmptyInventory faults without authority: both item lists are given length 0 */
+        a->write_mem(t->mod + oi + 8, &z, 4); a->write_mem(t->mod + oi + 24, &z, 4);
+    }
+    t->base = 0;
+}
 static int is_removed(const uint8_t *id) { for (int i = 0; i < S.nremoved; i++) if (!memcmp(S.removed[i], id, 16)) return 1; return 0; }
 static void add_removed(const uint8_t *id) { if (is_removed(id)) return; if (S.nremoved < 2048) memcpy(S.removed[S.nremoved++], id, 16); }
 static void idstr(const uint8_t *id, char *o) { sprintf(o, "%02x%02x%02x%02x-%02x%02x%02x%02x", id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]); }
@@ -158,21 +188,31 @@ static void scan_items(CoreAPI *a, double *hp)
     int end = S.isc_pos + 30000; if (end > n) end = n;
     for (int i = S.isc_pos; i < end; i++) {
         uint8_t *o = a->object_at(i); if (!o) continue;
-        int idoff = -1; if (!cls_has_item(a, a->obj_class(o), &idoff) || idoff < 0) continue;
+        int idoff = -1; int kind = cls_has_item(a, a->obj_class(o), &idoff); if (!kind) continue;
+        if (kind == 3) {
+            if (S.keep_birds) continue;
+            uint32_t fl = 0; a->read_mem(o + 8, &fl, 4); if ((fl & 0x8000) || a->read_bool(o, "bActorIsBeingDestroyed") == 1) continue;
+            char bn[96]; a->obj_name(o, bn, sizeof bn); if (!strncmp(bn, "Default__", 9)) continue;
+            a->destroy_actor(o); S.n_birds++; if (S.n_birds <= 5 || S.n_birds % 50 == 0) a->log("S ambient bird/flock removed: %s (%d so far)", bn, S.n_birds); continue;
+        }
+        if (idoff < 0) continue;
         int known = 0; for (int j = 0; j < S.nit; j++) if (S.it[j].ptr == o) { known = 1; break; }
         if (known || S.nit >= MAXI) continue;
         { uint32_t fl = 0; a->read_mem(o + 8, &fl, 4); if ((fl & 0x8000) || a->read_bool(o, "bActorIsBeingDestroyed") == 1) continue; }          /* already destroyed, waiting for the garbage collector */
         char nm[96]; a->obj_name(o, nm, sizeof nm); if (!strncmp(nm, "Default__", 9)) continue;
         double p[3]; if (!loc_of(a, o, p)) continue;
         double dx = p[0] - hp[0], dy = p[1] - hp[1]; if (dx * dx + dy * dy > 3500.0 * 3500.0) continue;
-        It *t = &S.it[S.nit]; memset(t, 0, sizeof *t); t->ptr = o; snprintf(t->name, sizeof t->name, "%s", nm); a->read_mem(o + 0x18, t->fname, 8); a->read_mem(o + idoff, t->id, 16); memcpy(t->pos, p, sizeof p);
+        It *t = &S.it[S.nit]; memset(t, 0, sizeof *t); t->ptr = o; t->chest = kind == 2; snprintf(t->name, sizeof t->name, "%s", nm); a->read_mem(o + 0x18, t->fname, 8); a->read_mem(o + idoff, t->id, 16); memcpy(t->pos, p, sizeof p);
         { int zero = 1; for (int b = 0; b < 16; b++) if (t->id[b]) zero = 0;
           if (zero) {                                                                         /* spawned by the level, no persistent id: class + position (deterministic in both copies) is the key */
               char cn[96]; a->obj_name(a->obj_class(o), cn, sizeof cn); uint32_t h1 = fnv(cn), h2 = 2166136261u;
               long q[3] = { (long)(p[0] / 25.0 + (p[0] < 0 ? -0.5 : 0.5)), (long)(p[1] / 25.0 + (p[1] < 0 ? -0.5 : 0.5)), (long)(p[2] / 25.0 + (p[2] < 0 ? -0.5 : 0.5)) };
               for (int b = 0; b < 3; b++) { h2 ^= (uint32_t)q[b]; h2 *= 16777619u; h1 ^= (uint32_t)(q[b] >> 3); h1 *= 16777619u; }
               memcpy(t->id, &h1, 4); memcpy(t->id + 4, &h2, 4); t->id[15] = 0xA5; } }
+        if (t->chest) { t->id[14] ^= 0xC3; t->mod = chest_module(a, o); if (!t->mod) continue; t->base = chest_count(a, t->mod); if (t->base < 0) continue; }
+        if (t->chest && is_removed(t->id)) { chest_empty(a, t); S.n_chest_applied++; a->log("S chest %s emptied on arrival (looted by the other player)", nm); S.nit++; continue; }
         if (is_removed(t->id)) { a->destroy_actor(o); a->log("S item %s removed on arrival (picked up by the other player)", nm); continue; }
+        if (t->chest) a->log("S chest tracked: %s, %d items", nm, t->base);
         S.nit++;
     }
     S.isc_pos = end;
@@ -188,7 +228,17 @@ static void check_items(CoreAPI *a, double *hp)
         It *t = &S.it[j]; int dead = !same_obj(a, t->ptr, t->fname);
         if (!dead) { uint32_t fl = 0; a->read_mem(t->ptr + 8, &fl, 4); if (fl & 0x8000) dead = 1; }               /* RF_BeginDestroyed */
         if (!dead && a->read_bool(t->ptr, "bActorIsBeingDestroyed") == 1) dead = 1;                  /* Destroy() was called, the object waits for the garbage collector */
+        if (!dead && t->chest) {
+            int cnt = chest_count(a, t->mod); double dx = t->pos[0] - hp[0], dy = t->pos[1] - hp[1];
+            if (cnt == 0 && t->base > 0 && dx * dx + dy * dy < 2500.0 * 2500.0 && S.ngone < 128 && !is_removed(t->id)) {          /* this hero emptied it */
+                memcpy(S.gone[S.ngone].id, t->id, 16); S.gone[S.ngone].sent = 0; S.ngone++; add_removed(t->id); S.n_chest_sent++;
+                char b[24]; idstr(t->id, b); a->log("S chest %s emptied here (id %s)", t->name, b);
+            }
+            if (cnt >= 0) t->base = cnt;
+            j++; continue;
+        }
         if (!dead) { loc_of(a, t->ptr, t->pos); j++; continue; }
+        if (t->chest) { S.it[j++].ptr = NULL; continue; }
         double dx = t->pos[0] - hp[0], dy = t->pos[1] - hp[1];
         if (dx * dx + dy * dy < 2500.0 * 2500.0 && !is_removed(t->id) && nc < MAXI) cand[nc++] = j;
         S.it[j++].ptr = NULL;                                                                   /* mark: forget below */
@@ -235,7 +285,9 @@ static void apply_remote(CoreAPI *a, const uint8_t *B, int len)
     for (int k = 0; k < nit; k++, p += 16) {
         const uint8_t *id = B + p; add_removed(id);
         for (int j = 0; j < S.nit; j++) if (!memcmp(S.it[j].id, id, 16)) {
-            char b[24]; idstr(id, b); a->log("S item %s removed: the other player picked it up (id %s)", S.it[j].name, b);
+            if (S.it[j].chest && S.it[j].base == 0) break;                                             /* already empty here: the other copy is only repeating itself until it hears our acknowledgement */
+            char b[24]; idstr(id, b); a->log("S %s %s: the other player %s (id %s)", S.it[j].chest ? "chest" : "item", S.it[j].name, S.it[j].chest ? "emptied it" : "picked it up", b);
+            if (S.it[j].chest) { chest_empty(a, &S.it[j]); S.n_chest_applied++; break; }
             a->destroy_actor(S.it[j].ptr); S.it[j] = S.it[--S.nit]; S.n_pick_applied++; break;
         }
     }
@@ -266,7 +318,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
     go:;
     int fresh = now - S.last_tick >= 1000; if (fresh) S.last_tick = now;
     if (GetFileAttributesA(BUILD "story_off.txt") != INVALID_FILE_ATTRIBUTES) { S.off = 1; return; }
-    S.off = 0; S.role = role_of();
+    S.off = 0; S.role = role_of(); S.keep_birds = GetFileAttributesA(BUILD "ambient_keep.txt") != INVALID_FILE_ATTRIBUTES;
     if (a->hero != S.last_hero) { S.last_hero = a->hero; S.last_hero_t = now; reset_story(); S.qsys = NULL; S.nq = 0; S.scanning = 0; S.have_contact = 0; }
     if (!a->hero || !a->have_remote || now - S.last_hero_t < 10000) return;               /* a new world has to settle first */
     if (S.story && !same_obj(a, S.story, S.story_fn)) reset_story();

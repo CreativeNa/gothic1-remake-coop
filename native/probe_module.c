@@ -410,6 +410,39 @@ static void run_command(char *line)
         P("%d actors with a persistent id", total);
         return;
     }
+    if (!strcmp(c, "contscan")) {                                        /* contscan [max]: DataModule_Container objects (chests, bodies, characters) whose m_Inventory struct is not all zero: first 96 bytes and the owning actor */
+        int max = nt > 1 ? atoi(tok[1]) : 6, shown = 0, total = 0, nonzero = 0, n = A->num_objects(); char nm[160];
+        uint8_t *dc = A->find_object(NULL, "Default__DataModule_Container", NULL); uint8_t *kc = dc ? A->obj_class(dc) : NULL; if (!kc) { P("no DataModule_Container class"); return; }
+        int oi = A->find_prop_offset(kc, "m_Inventory");
+        for (int i = 0; i < n; i++) {
+            uint8_t *o = A->object_at(i); if (!o || A->obj_class(o) != kc) continue;
+            A->obj_name(o, nm, sizeof nm); if (!strncmp(nm, "Default__", 9)) continue;
+            total++; uint8_t b[96]; if (!A->read_mem(o + oi, b, 96)) continue;
+            int nz = 0; for (int k = 0; k < 96; k++) if (b[k]) { nz = 1; break; }
+            if (!nz) continue; nonzero++;
+            if (shown < max) { shown++; char h[300] = ""; for (int k = 0; k < 96; k++) { char t[4]; sprintf(t, "%02x", b[k]); strcat(h, t); if (k % 8 == 7) strcat(h, " "); }
+                P("  %p %s: %s", o, nm, h); }
+        }
+        P("%d container modules, %d with a non-empty inventory struct", total, nonzero);
+        return;
+    }
+    if (!strcmp(c, "emptychest") && nt >= 2) {                           /* emptychest <chest actor ptr>: removes everything from its container module (what taking all the loot does), test helper */
+        uint8_t *ch = ptr_of(tok[1]); if (!live(ch)) { P("not a live object"); return; }
+        uint8_t *dc = A->find_object(NULL, "Default__DataModule_Container", NULL); uint8_t *kc = dc ? A->obj_class(dc) : NULL;
+        int oc = A->find_prop_offset(A->obj_class(ch), "m_DataModuleComponent"); uint8_t *comp = NULL; if (oc >= 0) A->read_mem(ch + oc, &comp, 8);
+        int oa = comp ? A->find_prop_offset(A->obj_class(comp), "m_DataModules") : -1; uint8_t *arr = NULL; int num = 0;
+        if (oa >= 0) { A->read_mem(comp + oa, &arr, 8); A->read_mem(comp + oa + 8, &num, 4); }
+        for (int i = 0; arr && i < num && i < 32; i++) { uint8_t *m = NULL; A->read_mem(arr + (size_t)i * 8, &m, 8);
+            if (m && A->obj_class(m) == kc) { int oi = A->find_prop_offset(kc, "m_Inventory"), n0 = 0, n1 = 0; A->read_mem(m + oi + 8, &n0, 4); A->read_mem(m + oi + 24, &n1, 4);
+                P("container %p: %d + %d items before", m, n0, n1);
+                if (nt > 2 && !strcmp(tok[2], "dry")) return;
+                int ok = 0;                                                          /* the game's Server_Debug_EmptyInventory faults here: the item lists are given length 0 instead */
+                A->read_mem(m + oi + 8, &n0, 4); A->read_mem(m + oi + 24, &n1, 4);
+                if (n0 + n1 > 0) { int z = 0; A->write_mem(m + oi + 8, &z, 4); A->write_mem(m + oi + 24, &z, 4); A->read_mem(m + oi + 8, &n0, 4); A->read_mem(m + oi + 24, &n1, 4); P("function refused, item lists set to length 0"); }
+                P("empty call %d, now %d + %d items", ok, n0, n1); return; } }
+        P("no container module found");
+        return;
+    }
     if (!strcmp(c, "heroinfo")) {                                        /* heroinfo: the hero's position (to put it back after a test) */
         double l[3] = { 0 }; if (!A->hero || !A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, l, 24)) { P("HEROINFO none"); return; }
         P("HEROINFO pos %.0f %.0f %.0f", l[0], l[1], l[2]); return;
