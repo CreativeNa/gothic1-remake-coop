@@ -391,8 +391,8 @@ static struct ModSlot {
     FILETIME mtime; int serial; int need_init; char loaded_path[MAX_PATH];
     double cost_sum, cost_max; int cost_n;      /* mod_update cost in ms since the last log line */
     int always;                 /* 1: called every engine tick (menu, loading screens, no friend needed); 0: only while the puppet exists */
-} g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "npc" }, { .name = "story", .always = 1 }, { .name = "probe", .always = 1 } };
-static int g_nmods = 6;
+} g_mods[MAX_MODS] = { { .name = "anim" }, { .name = "equip" }, { .name = "pose" }, { .name = "npc" }, { .name = "story", .always = 1 }, { .name = "menu", .always = 1 }, { .name = "probe", .always = 1 } };
+static int g_nmods = 7;
 
 static double seq_length_w(uint8_t *seq)
 {
