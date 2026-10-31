@@ -916,6 +916,14 @@ static void module_run(int always)
     }
 }
 
+static FnInfo g_setvis;
+static void skvis(int vis)                                 /* the puppet's mesh component: hidden until the friend's first packet (the core un-hides the ACTOR every tick, so the component is used) */
+{
+    if (!T.skcomp) return;
+    if (!g_setvis.fn) load_fn("SceneComponent", "SetVisibility", &g_setvis);
+    if (!g_setvis.fn) return;
+    uint8_t v = (uint8_t)vis, prop = 0, *b = pnew(&g_setvis); pset(&g_setvis, b, "bNewVisibility", &v, 1); pset(&g_setvis, b, "bPropagateToChildren", &prop, 1); pcall(T.skcomp, &g_setvis, b); _aligned_free(b);
+}
 static void module_frame(void)  { module_run(0); }     /* modules that need the puppet */
 static void module_always(void)  { module_run(1); }     /* modules that run every tick */
 
@@ -1324,11 +1332,12 @@ static void frame_work(void)
                     }
                     T.last_rp[0] = x; T.last_rp[1] = y; T.last_rp[2] = z; T.last_rt = nowt;
                     T.rpos[0] = x; T.rpos[1] = y; T.rpos[2] = z; T.ryaw = yaw;
-                    if (!T.have_remote) { T.shown[0] = x; T.shown[1] = y; T.shown[2] = z; logf_("N3 first packet from %s at %.0f %.0f %.0f", pid, x, y, z); }
+                    if (!T.have_remote) { T.shown[0] = x; T.shown[1] = y; T.shown[2] = z; logf_("N3 first packet from %s at %.0f %.0f %.0f", pid, x, y, z); skvis(1); }
                     T.have_remote = 1;
                 }
             }
         }
+        if (!T.have_remote && T.marker && T.skcomp && T.frame % 20 == 0) skvis(0);
         if (T.have_remote && T.marker && T.puppet_char == 2 && T.skcomp && T.playanim.fn) module_frame();
         if (T.have_remote && T.marker) {
             for (int k = 0; k < 3; k++) T.shown[k] += (T.rpos[k] - T.shown[k]) * 0.35;   /* smooth 20 Hz data */
