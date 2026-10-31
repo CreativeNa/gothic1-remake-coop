@@ -1,7 +1,7 @@
 # Automated end-to-end suite for the two-copy coop mod. No human needed: it starts both copies, drives them with game input actions and probe commands,
 # asserts on numbers (positions, flags, log lines, fps, crashes) and writes docs\reports\last_run.md with PASS / FAIL per check.
 #   run_all.ps1 [-NoStart] [-Quick]      -NoStart: use the copies that are already running;  -Quick: skip the quick-load rounds
-param([switch]$NoStart, [switch]$Quick, [string]$Npc = "Ratford")
+param([switch]$NoStart, [switch]$Quick, [string]$Npc = "Ratford", [string]$Net = "", [string]$Report = "last_run")   # -Net "loss=10 delay=150 jitter=60 dup=2": run through the impairment proxy
 $c = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $dev = Join-Path $c "tools\dev.ps1"; $log = Join-Path $c "native\build\coopdll.log"
 $results = New-Object System.Collections.ArrayList
@@ -13,6 +13,16 @@ function Focus($seat) { & (Join-Path $c "tools\realclick.ps1") -Seat $seat -Clic
 function Ready { foreach ($s in 0, 1) { if (-not ((Probe $s "frames") -match "have_remote=1")) { return $false } }; return $true }
 
 # ---- 0. start ----
+$proxy = $null; $proxyFile = Join-Path $c "native\build\net_proxy.txt"; $proxyStats = Join-Path $c "native\build\net_proxy_stats.txt"
+if ($Net) {
+    $args2 = @("--port", "41001", "--base", "40001", "--stats", $proxyStats)
+    foreach ($kv in ($Net -split "\s+")) { if ($kv -match "^(loss|delay|jitter|dup)=([\d.]+)$") { $args2 += "--$($matches[1])"; $args2 += $matches[2] } }
+    Set-Content $proxyFile "41001"
+    $args2 = @('"' + (Join-Path $PSScriptRoot "netproxy.py") + '"') + @($args2 | ForEach-Object { if ($_ -match "\s") { '"' + $_ + '"' } else { $_ } })     # paths with spaces need quotes
+    $proxy = Start-Process python -ArgumentList $args2 -PassThru -WindowStyle Hidden
+    Start-Sleep 1
+    "network proxy started: $Net"
+} elseif (Test-Path $proxyFile) { Remove-Item $proxyFile }
 if (-not $NoStart) {
     & (Join-Path $c "tools\harness.ps1") stop; Start-Sleep 3
     & (Join-Path $c "tools\harness_start.ps1") | Out-Null
@@ -23,6 +33,11 @@ $hp = PidOf 0; $gp = PidOf 1
 Check "boot: two game processes" ([bool]($hp -and $gp)) "host $hp, guest $gp"
 if (-not ($hp -and $gp)) { $results | Format-Table | Out-String | Write-Host; exit 1 }
 Start-Sleep 20                                                                    # let the NPC lists fill
+
+# ---- 1a. the packets really arrive (the same save gives equal NPC positions even without any sync, so positions alone prove nothing) ----
+Start-Sleep 6
+$mir = @(LogLines | Select-String "^\[$gp\] N seat 1: .*mirroring [1-9]")
+Check "net: the guest receives the host's NPC data and mirrors NPCs" ($mir.Count -gt 0) ($mir | Select-Object -Last 1 | ForEach-Object { $_.Line.Substring($_.Line.IndexOf("N seat")) })
 
 # ---- 1. numeric NPC sync (positions, flags) ----
 $diff = & (Join-Path $c "tools\diff_npcs.ps1") -Quiet -MaxDist 200
@@ -109,6 +124,8 @@ $dir = Join-Path $c "docs\reports"; New-Item -ItemType Directory -Force $dir | O
 $pass = @($results | Where-Object Result -eq "PASS").Count
 $md = "# Automated run $(Get-Date -Format 'yyyy-MM-dd HH:mm')`n`n$pass / $($results.Count) checks passed.`n`n| Result | Check | Detail |`n|---|---|---|`n"
 foreach ($r in $results) { $md += "| $($r.Result) | $($r.Check) | $($r.Detail -replace '\|', '/' -replace "`r?`n", ' ') |`n" }
-Set-Content (Join-Path $dir "last_run.md") $md -Encoding UTF8
-"`n$pass / $($results.Count) checks passed -> docs\reports\last_run.md"
+if ($Net) { $md = $md.Replace("# Automated run", "# Automated run [network: $Net]") ; $st = Get-Content $proxyStats -ErrorAction SilentlyContinue; if ($st) { $md += "`nProxy: $st`n" } }
+Set-Content (Join-Path $dir "$Report.md") $md -Encoding UTF8
+if ($proxy) { Stop-Process -Id $proxy.Id -Force -ErrorAction SilentlyContinue; Remove-Item $proxyFile -ErrorAction SilentlyContinue }
+"`n$pass / $($results.Count) checks passed -> docs\reports\$Report.md"
 exit $(if ($pass -eq $results.Count) { 0 } else { 1 })

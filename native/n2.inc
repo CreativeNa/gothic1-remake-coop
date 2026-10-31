@@ -640,6 +640,37 @@ static uint8_t g_lblob[BLOB_MAX]; static int g_lblob_len;
 static uint8_t g_rblob[BLOB_MAX], g_rasm[BLOB_MAX]; static int g_rblob_len, g_rblob_seq, g_rexpect;
 static uint8_t g_lblob2[BLOB_MAX]; static int g_lblob2_len;                       /* second channel (shared world: NPC states), "N|" chunks */
 static uint8_t g_rblob2[BLOB_MAX], g_rasm2[BLOB_MAX]; static int g_rblob2_len, g_rblob2_seq, g_rexpect2;
+
+/* Reassembly of chunked blobs that survives loss, reordering and duplicates: every chunk carries the blob's sequence number, so chunks of several blobs may be in flight at once;
+ * a blob is complete when all its chunks have arrived (in any order), and an older blob is never delivered after a newer one. */
+typedef struct { int seq, count, got, lastlen; uint32_t mask[8]; unsigned long t; uint8_t data[BLOB_MAX]; } BlobAsm;
+typedef struct { BlobAsm a[4]; int last_seq; int have_last; } BlobRing;
+static BlobRing g_ring_b, g_ring_n;
+static uint8_t g_send_seq_b, g_send_seq_n;
+static int ring_feed(BlobRing *r, const uint8_t *rx, int n, uint8_t *out, int *outlen)
+{
+    if (n <= 5) return 0;
+    int k = rx[2], count = rx[3], seq = rx[4], pl = n - 5;
+    if (count < 1 || k >= count || count > 255 || k * BLOB_CHUNK + pl > BLOB_MAX || pl > BLOB_CHUNK) return 0;
+    BlobAsm *a = NULL; unsigned long now = GetTickCount();
+    for (int i = 0; i < 4; i++) if (r->a[i].count == count && r->a[i].seq == seq && r->a[i].got < r->a[i].count) a = &r->a[i];
+    if (!a) {                                                                    /* a new blob: take a free slot, else the oldest */
+        int pick = 0; for (int i = 0; i < 4; i++) { if (r->a[i].count == 0) { pick = i; break; } if (r->a[i].t < r->a[pick].t) pick = i; }
+        a = &r->a[pick]; memset(a->mask, 0, sizeof a->mask); a->seq = seq; a->count = count; a->got = 0; a->lastlen = 0;
+    }
+    a->t = now;
+    if (!(a->mask[k >> 5] & (1u << (k & 31)))) {
+        memcpy(a->data + k * BLOB_CHUNK, rx + 5, (size_t)pl); a->mask[k >> 5] |= 1u << (k & 31); a->got++;
+        if (k == count - 1) a->lastlen = pl;
+    }
+    if (a->got < a->count) return 0;
+    int newer = !r->have_last || (int8_t)(seq - r->last_seq) > 0;
+    int len = (count - 1) * BLOB_CHUNK + a->lastlen;
+    a->count = 0;                                                                /* the slot is free again */
+    if (!newer || len <= 0 || len > BLOB_MAX) return 0;
+    r->last_seq = seq; r->have_last = 1; memcpy(out, a->data, (size_t)len); *outlen = len; return 1;
+}
+
 static void set_local_blob2_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob2) len = 0; memcpy(g_lblob2, d, (size_t)len); g_lblob2_len = len; }
 static void set_local_blob_w(const void *d, int len) { if (len < 0 || len > (int)sizeof g_lblob) len = 0; memcpy(g_lblob, d, (size_t)len); g_lblob_len = len; }
 
@@ -1110,20 +1141,20 @@ static void frame_work(void)
             if (T.frame % 30 == 0 && spd > 5) logf_("V local speed %.0f vz %.0f", spd, vel[2]);
             int n = snprintf(msg, sizeof msg, "P|%s|%.2f|%.2f|%.2f|%.1f|%d|%d|%s|%s|%.1f|%.1f|%d|%s", T.id, h[0], h[1], h[2], r[1], ++T.seq, mm, act, g_act_pkg[0] ? g_act_pkg : "-", spd, vel[2], crouch, T.local_extra[0] ? T.local_extra : "-");
             sendto(T.sock, msg, n, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
-            if (g_lblob_len > 0) {                      /* "B|" chunk index, chunk count, payload (at most BLOB_CHUNK bytes) */
-                int count = (g_lblob_len + BLOB_CHUNK - 1) / BLOB_CHUNK;
+            if (g_lblob_len > 0) {                      /* "B|" chunk index, chunk count, blob sequence, payload (at most BLOB_CHUNK bytes) */
+                int count = (g_lblob_len + BLOB_CHUNK - 1) / BLOB_CHUNK; g_send_seq_b++;
                 for (int k = 0; k < count; k++) {
                     uint8_t bm[BLOB_CHUNK + 8]; int pl = g_lblob_len - k * BLOB_CHUNK; if (pl > BLOB_CHUNK) pl = BLOB_CHUNK;
-                    bm[0] = 'B'; bm[1] = '|'; bm[2] = (uint8_t)k; bm[3] = (uint8_t)count; memcpy(bm + 4, g_lblob + k * BLOB_CHUNK, (size_t)pl);
-                    sendto(T.sock, (const char *)bm, pl + 4, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
+                    bm[0] = 'B'; bm[1] = '|'; bm[2] = (uint8_t)k; bm[3] = (uint8_t)count; bm[4] = g_send_seq_b; memcpy(bm + 5, g_lblob + k * BLOB_CHUNK, (size_t)pl);
+                    sendto(T.sock, (const char *)bm, pl + 5, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
                 }
             }
             if (g_lblob2_len > 0) {
-                int count = (g_lblob2_len + BLOB_CHUNK - 1) / BLOB_CHUNK;
+                int count = (g_lblob2_len + BLOB_CHUNK - 1) / BLOB_CHUNK; g_send_seq_n++;
                 for (int k = 0; k < count; k++) {
                     uint8_t bm[BLOB_CHUNK + 8]; int pl = g_lblob2_len - k * BLOB_CHUNK; if (pl > BLOB_CHUNK) pl = BLOB_CHUNK;
-                    bm[0] = 'N'; bm[1] = '|'; bm[2] = (uint8_t)k; bm[3] = (uint8_t)count; memcpy(bm + 4, g_lblob2 + k * BLOB_CHUNK, (size_t)pl);
-                    sendto(T.sock, (const char *)bm, pl + 4, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
+                    bm[0] = 'N'; bm[1] = '|'; bm[2] = (uint8_t)k; bm[3] = (uint8_t)count; bm[4] = g_send_seq_n; memcpy(bm + 5, g_lblob2 + k * BLOB_CHUNK, (size_t)pl);
+                    sendto(T.sock, (const char *)bm, pl + 5, 0, (struct sockaddr *)&T.peer, sizeof T.peer);
                 }
             }
         }
@@ -1139,22 +1170,14 @@ static void frame_work(void)
                     continue;
                 }
                 rx[n] = 0;
-                if (n > 4 && rx[0] == 'B' && rx[1] == '|') {
-                    int k = (uint8_t)rx[2], count = (uint8_t)rx[3], pl = n - 4;
-                    if (k == 0) g_rexpect = 0;
-                    if (k == g_rexpect && (k + 1) * BLOB_CHUNK <= BLOB_MAX + BLOB_CHUNK - pl && k * BLOB_CHUNK + pl <= BLOB_MAX) {
-                        memcpy(g_rasm + k * BLOB_CHUNK, rx + 4, (size_t)pl); g_rexpect++;
-                        if (k == count - 1) { g_rblob_len = k * BLOB_CHUNK + pl; memcpy(g_rblob, g_rasm, (size_t)g_rblob_len); g_rblob_seq++; g_rexpect = 0; }
-                    } else g_rexpect = 0;
+                if (n > 5 && rx[0] == 'B' && rx[1] == '|') {
+                    uint8_t ob[BLOB_MAX]; int ol = 0;
+                    if (ring_feed(&g_ring_b, (const uint8_t *)rx, n, ob, &ol)) { memcpy(g_rblob, ob, (size_t)ol); g_rblob_len = ol; g_rblob_seq++; }
                     continue;
                 }
-                if (n > 4 && rx[0] == 'N' && rx[1] == '|') {
-                    int k = (uint8_t)rx[2], count = (uint8_t)rx[3], pl = n - 4;
-                    if (k == 0) g_rexpect2 = 0;
-                    if (k == g_rexpect2 && k * BLOB_CHUNK + pl <= BLOB_MAX) {
-                        memcpy(g_rasm2 + k * BLOB_CHUNK, rx + 4, (size_t)pl); g_rexpect2++;
-                        if (k == count - 1) { g_rblob2_len = k * BLOB_CHUNK + pl; memcpy(g_rblob2, g_rasm2, (size_t)g_rblob2_len); g_rblob2_seq++; g_rexpect2 = 0; }
-                    } else g_rexpect2 = 0;
+                if (n > 5 && rx[0] == 'N' && rx[1] == '|') {
+                    uint8_t ob[BLOB_MAX]; int ol = 0;
+                    if (ring_feed(&g_ring_n, (const uint8_t *)rx, n, ob, &ol)) { memcpy(g_rblob2, ob, (size_t)ol); g_rblob2_len = ol; g_rblob2_seq++; }
                     continue;
                 }
                 char pid[16], ract[96] = "-", rpkg[256] = "-"; double x, y, z, yaw, rsp = -1, rvz = 0; int seq, rmm = 1, rcr = 0; char rextra[900] = "-";

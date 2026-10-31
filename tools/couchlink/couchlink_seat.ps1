@@ -27,6 +27,8 @@ try {
     Start-Sleep ($SettleSeconds + 0 * $Seat)                              # seat 1 starts while seat 0 loads the save: its engine is slower, at 13 s it was not ready (no GameEngine)
     $local = $BasePort + $Seat
     $peerPort = $BasePort + (1 - $Seat)
+    $proxyFile = Join-Path $nat "net_proxy.txt"                            # bad-network tests: send to tools\tests\netproxy.py (port P for seat 0, P+1 for seat 1) instead of to the other copy
+    if (Test-Path $proxyFile) { $peerPort = [int](Get-Content $proxyFile -TotalCount 1) + $Seat; Log "seat ${Seat}: sending through the network proxy, port $peerPort" }
     Set-Content "$nat\cfg_$($proc.Id).txt" "$local $Peer $peerPort S$Seat"
     $out = & "$nat\inject.exe" $proc.Id "$nat\$Dll" 2>&1
     Log "seat ${Seat}: inject -> $out"
