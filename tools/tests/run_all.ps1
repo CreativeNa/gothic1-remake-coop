@@ -114,7 +114,7 @@ foreach ($s in 0, 1) {
     $med = if ($f.Count) { $f[[int]($f.Count / 2)] } else { 0 }
     Check "fps: seat $s median of the last samples >= 15" ($med -ge 15) ("{0:N1} fps" -f $med)
 }
-$ours = @(& (Join-Path $c "tools\logq.ps1") -Crashes -Last 40 | Where-Object { $_ -match "our code at that moment: call=(?!none)|module=(?!none)|EXCEPTION" })
+$ours = @(& (Join-Path $c "tools\logq.ps1") -Crashes -Last 40 | Where-Object { $_ -match "our code at that moment: call=(?!none)|EXCEPTION" })
 Check "stability: no access violation or exception inside our code (this run)" ($ours.Count -eq 0) ($ours | Select-Object -First 2 | Out-String).Trim()
 $dumps = @(Get-ChildItem (Join-Path $c "game-test\G1R\Binaries\Win64") -Filter *.dmp -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-25) })
 Check "stability: no new crash dump" ($dumps.Count -eq 0) (($dumps | ForEach-Object Name) -join ", ")

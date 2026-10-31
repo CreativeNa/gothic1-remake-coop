@@ -383,6 +383,10 @@ static void run_command(char *line)
         int ok = A->call_fn(asc[0], "AbilitySystemComponent", "BP_ApplyGameplayEffectToTarget", 4, nn, vv, ss, ret, 8);
         P("gedamage ran: %d, handle %02x%02x%02x%02x", ok, ret[0], ret[1], ret[2], ret[3]); return;
     }
+    if (!strcmp(c, "heroinfo")) {                                        /* heroinfo: the hero's position (to put it back after a test) */
+        double l[3] = { 0 }; if (!A->hero || !A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, l, 24)) { P("HEROINFO none"); return; }
+        P("HEROINFO pos %.0f %.0f %.0f", l[0], l[1], l[2]); return;
+    }
     if (!strcmp(c, "npcs")) {                                           /* characters in the world with their class chain and distance to the hero */
         double rad = nt > 1 ? atof(tok[1]) : 3000, hp[3] = {0,0,0}; int max = nt > 2 ? atoi(tok[2]) : 20, shown = 0, total = 0;
         if (A->hero) A->call_fn(A->hero, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, hp, 24);

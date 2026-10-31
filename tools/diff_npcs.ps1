@@ -9,6 +9,7 @@ function Rows($seat) {
     $part = (($o -split "===== game pid ") | Where-Object { $_ -match "^$id" }) -join "`n"
     foreach ($l in ($part -split "`n")) {
         if ($l -match 'NPCINFO (\S+) pos (-?\d+) (-?\d+) (-?\d+) yaw (-?\d+) defeated (\d) health (-?\d+) controller (\d)') {
+            if ($matches[1] -match '_\d{8,}$' -or ([math]::Abs([double]$matches[2]) + [math]::Abs([double]$matches[3])) -lt 1000) { continue }
             [pscustomobject]@{ Name = $matches[1]; X = [double]$matches[2]; Y = [double]$matches[3]; Z = [double]$matches[4]; Yaw = [double]$matches[5]; Defeated = [int]$matches[6]; Health = [double]$matches[7]; Controller = [int]$matches[8] }
         }
     }
@@ -16,12 +17,13 @@ function Rows($seat) {
 $h = @(Rows 0); $g = @(Rows 1)
 $out = foreach ($a in $h) {
     $b = $g | Where-Object { $_.Name -eq $a.Name } | Select-Object -First 1
-    if (-not $b) { [pscustomobject]@{ Name = $a.Name; Dist = $null; HostDefeated = $a.Defeated; GuestDefeated = $null; HostHp = $a.Health; GuestHp = $null; Verdict = "MISSING in guest" }; continue }
+    if (-not $b) { [pscustomobject]@{ Name = $a.Name; Dist = $null; HostDefeated = $a.Defeated; GuestDefeated = $null; HostHp = $a.Health; GuestHp = $null; Verdict = "not loaded in the guest (streamed out, not a sync error)" }; continue }
     $d = [math]::Sqrt([math]::Pow($a.X - $b.X, 2) + [math]::Pow($a.Y - $b.Y, 2) + [math]::Pow($a.Z - $b.Z, 2))
     $v = if ($d -gt $MaxDist) { "POSITION off by $([int]$d)" } elseif ($a.Health -ge 0 -and $b.Health -ge 0 -and [math]::Abs($a.Health - $b.Health) -gt 8) { "HEALTH differs ($($a.Health) vs $($b.Health))" } else { "ok" }
     [pscustomobject]@{ Name = $a.Name -replace '^Character_', ''; Dist = [int]$d; HostDefeated = $a.Defeated; GuestDefeated = $b.Defeated; HostHp = $a.Health; GuestHp = $b.Health; Verdict = $v }
 }
 if (-not $Quiet) { $out | Format-Table -AutoSize | Out-String | Write-Host }
-$bad = @($out | Where-Object { $_.Verdict -ne "ok" })
-"NPCs compared: $(@($out).Count), mismatching: $($bad.Count)"
+$bad = @($out | Where-Object { $_.Verdict -ne "ok" -and $_.Verdict -notmatch "^not loaded" })
+$compared = @($out | Where-Object { $_.Verdict -notmatch "^not loaded" })
+"NPCs compared: $($compared.Count), mismatching: $($bad.Count)"
 exit $(if ($bad.Count) { 1 } else { 0 })

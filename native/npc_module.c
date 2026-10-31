@@ -100,6 +100,8 @@ static void rescan_slice(CoreAPI *a)
     if (end >= n || N.ntmp >= 2048) { memcpy(N.known, N.tmp, (size_t)N.ntmp * sizeof(Known)); N.nknown = N.ntmp; memcpy(N.hs, N.hs_tmp, (size_t)N.nhs_tmp * sizeof N.hs[0]); N.nhs = N.nhs_tmp; N.scanning = 0; N.last_scan = GetTickCount(); }
 }
 
+/* an actor we may safely call functions on: alive, not being destroyed (a cell that streams out leaves actors that are dying but still pass obj_alive) */
+static int actor_ok(CoreAPI *a, uint8_t *o) { return o && a->obj_alive(o, NULL) && a->read_bool(o, "bActorIsBeingDestroyed") != 1; }
 static int loc_of(CoreAPI *a, uint8_t *o, double *v) { double r[3] = { 0, 0, 0 }; if (!a->call_fn(o, "Actor", "K2_GetActorLocation", 0, NULL, NULL, NULL, r, 24)) return 0; v[0] = r[0]; v[1] = r[1]; v[2] = r[2]; return 1; }
 
 static double speed_of(CoreAPI *a, uint8_t *o)
@@ -226,16 +228,17 @@ static void pick_focus(CoreAPI *a, const double *c1, int have2, const double *c2
 {
     N.nfocus = 0; double best[NFOCUS];
     for (int i = 0; i < N.nknown; i++) {
-        uint8_t *o = N.known[i].actor; if (!a->obj_alive(o, NULL)) continue;
-        double p[3]; if (!loc_of(a, o, p)) continue;
+        uint8_t *o = N.known[i].actor; if (!actor_ok(a, o)) continue;
+        double p[3]; if (!loc_of(a, o, p)) { N.known[i].actor = NULL; continue; }
         double d1 = sqrt((p[0] - c1[0]) * (p[0] - c1[0]) + (p[1] - c1[1]) * (p[1] - c1[1]) + (p[2] - c1[2]) * (p[2] - c1[2]));
         double d2 = have2 ? sqrt((p[0] - c2[0]) * (p[0] - c2[0]) + (p[1] - c2[1]) * (p[1] - c2[1]) + (p[2] - c2[2]) * (p[2] - c2[2])) : 1e18;
         double d = d1 < d2 ? d1 : d2; if (d > FOCUS_R) continue;
         if (own_get(N.known[i].id) != N.seat) continue;                          /* the other copy simulates this one and sends its bones */
         {   /* bone-driven copying only for NPCs that are defeated (lying, knocked out): a clip cannot show that pose. Everyone else keeps the normal mesh and animation: the bone-driven mesh of an NPC
              * that is sitting, standing or walking showed stretched arms and heads once a player came close. */
-            uint8_t df = 0; a->call_fn(o, "GothicCharacter", "IsDefeated", 0, NULL, NULL, NULL, &df, 1);
-            uint8_t dd = 0; a->call_fn(o, "GothicCharacter", "IsDead", 0, NULL, NULL, NULL, &dd, 1);
+            uint8_t df = 0, dd = 0;
+            if (!a->call_fn(o, "GothicCharacter", "IsDefeated", 0, NULL, NULL, NULL, &df, 1)) { N.known[i].actor = NULL; continue; }     /* the call faulted: the actor is gone (streamed out), forget it */
+            a->call_fn(o, "GothicCharacter", "IsDead", 0, NULL, NULL, NULL, &dd, 1);
             if (!df && !dd) continue;
         }
         int pos = N.nfocus; while (pos > 0 && best[pos - 1] > d) pos--;
@@ -255,8 +258,8 @@ static void host_tick(CoreAPI *a, unsigned long now)
     if (now - N.last_own > 500) {                                            /* take over the NPCs my hero is clearly nearer to */
         N.last_own = now;
         for (int i = 0; i < N.nknown && have2; i++) {
-            uint8_t *o = N.known[i].actor; if (!a->obj_alive(o, NULL)) continue;
-            double p[3]; if (!loc_of(a, o, p)) continue;
+            uint8_t *o = N.known[i].actor; if (!actor_ok(a, o)) continue;
+            double p[3]; if (!loc_of(a, o, p)) { N.known[i].actor = NULL; continue; }
             double dm = dist3(p, c1), dother = dist3(p, c2);
             if (own_get(N.known[i].id) != N.seat && dm < RADIUS && dm + HYST < dother) {
                 own_set(a, N.known[i].id, N.seat, "my hero is nearer");
@@ -269,7 +272,7 @@ static void host_tick(CoreAPI *a, unsigned long now)
     static char strs[40][320]; static char strtab[6000];
     static Rec recs[MAXN];
     for (int i = 0; i < N.nknown && cnt < MAXN; i++) {
-        uint8_t *o = N.known[i].actor; if (!a->obj_alive(o, NULL)) continue;
+        uint8_t *o = N.known[i].actor; if (!actor_ok(a, o)) continue;
         double p[3]; if (!loc_of(a, o, p)) continue;
         double d1 = sqrt((p[0] - c1[0]) * (p[0] - c1[0]) + (p[1] - c1[1]) * (p[1] - c1[1]) + (p[2] - c1[2]) * (p[2] - c1[2]));
         double d2 = have2 ? sqrt((p[0] - c2[0]) * (p[0] - c2[0]) + (p[1] - c2[1]) * (p[1] - c2[1]) + (p[2] - c2[2]) * (p[2] - c2[2])) : 1e18;
@@ -279,7 +282,8 @@ static void host_tick(CoreAPI *a, unsigned long now)
         r.id = N.known[i].id; r.x = (float)p[0]; r.y = (float)p[1]; r.z = (float)p[2];
         r.yaw = (int16_t)(yaw_of(a, o) * 182.04); r.speed = (uint16_t)speed_of(a, o);
         {   uint8_t df = 0, dd = 0; int hp = npc_health(a, o);
-            a->call_fn(o, "GothicCharacter", "IsDefeated", 0, NULL, NULL, NULL, &df, 1); a->call_fn(o, "GothicCharacter", "IsDead", 0, NULL, NULL, NULL, &dd, 1);
+            if (!a->call_fn(o, "GothicCharacter", "IsDefeated", 0, NULL, NULL, NULL, &df, 1)) { N.known[i].actor = NULL; continue; }
+            a->call_fn(o, "GothicCharacter", "IsDead", 0, NULL, NULL, NULL, &dd, 1);
             { uint8_t *carry = ptr_prop(a, o, "m_CarryComponent"), *eq = ptr_prop(a, carry, "m_EquippedItem"); char ec[96] = "";
               if (eq) a->obj_name(a->obj_class(eq), ec, sizeof ec);
               if (strstr(ec, "ItMw")) r.flags |= 4; else if (strstr(ec, "ItRw")) r.flags |= 8; }
@@ -697,7 +701,7 @@ static void guest_tick(CoreAPI *a, unsigned long now)
     int applied = 0;
     for (int i = 0; i < N.nm; i++) {
         Mirror *m = &N.m[i];
-        if (!m->actor || !a->obj_alive(m->actor, NULL)) { m->frozen = 0; continue; }
+        if (!actor_ok(a, m->actor)) { m->frozen = 0; continue; }
         if (own_get(m->id) == N.seat) { if (m->frozen) release(a, m); continue; }     /* simulated here */
         if (!m->frozen) continue;
         if (m->gp) {
@@ -717,7 +721,7 @@ static void guest_tick(CoreAPI *a, unsigned long now)
         else { double k = 1.0 - exp(-dt * 12.0); m->cur[0] += dx * k; m->cur[1] += dy * k; m->cur[2] += dz * k; }
         uint8_t sw = 0, tp = 1;
         const char *nl[3] = { "NewLocation", "bSweep", "bTeleport" }; const void *vl[3] = { m->cur, &sw, &tp }; int sl[3] = { 24, 1, 1 };
-        a->call_fn(m->actor, "Actor", "K2_SetActorLocation", 3, nl, vl, sl, NULL, 0);
+        if (!a->call_fn(m->actor, "Actor", "K2_SetActorLocation", 3, nl, vl, sl, NULL, 0)) { m->actor = NULL; m->frozen = 0; m->gp = NULL; continue; }     /* faulted: the actor is gone */
         double rot[3] = { 0, m->want.yaw / 182.04, 0 };
         const char *nr[2] = { "NewRotation", "bTeleportPhysics" }; const void *vr[2] = { rot, &tp }; int sr[2] = { 24, 1 };
         a->call_fn(m->actor, "Actor", "K2_SetActorRotation", 2, nr, vr, sr, NULL, 0);
