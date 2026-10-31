@@ -289,6 +289,8 @@ static Mirror *mirror_for(CoreAPI *a, uint32_t id)
 /* play the host's montage clip on the frozen NPC (single-node animation), or give the animation blueprint back when the host plays none */
 static void set_anim(CoreAPI *a, Mirror *m)
 {
+    return;   /* NPC clips are NOT played any more: PlayAnimation switches the NPC's mesh to a single-node animation instance, and the game's own animation component then crashed (null read
+               * at exe+0x5ae259a, AnimSingleNodeInstance in rcx) when the guest's AI of that NPC ran an equip ability. Non-defeated NPCs are placed and given their speed only; defeated ones are bone-driven. */
     if (m->gp && m->gp->comp) return;                                         /* bone-driven NPCs do not play clips */
     uint8_t *mesh = ptr_prop(a, m->actor, "Mesh"); if (!mesh) return;
     if (!m->anim[0]) {
