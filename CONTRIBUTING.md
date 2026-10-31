@@ -37,10 +37,10 @@ Put an empty `native\build\autoload_skip_<seat>.txt` to stop one copy from loadi
 
 [CouchLink](https://github.com/cranebeaker/couchlink) starts one copy per player, each on its own monitor with its own input. The recipe is in the repository: `tools\couchlink\gothic1r-coop-test.json`.
 
-1. Copy the recipe to `%LOCALAPPDATA%\Couchlinkecipes\` and check the game path (`$GAME`) and the Steam app id in it.
-2. Start the "Gothic 1 Remake co-op (test copy)" recipe with 2 players. For every seat CouchLink starts the helper `tools\couchlink\couchlink_seat.vbs` (-> `couchlink_seat.ps1`), which finds the game process by its `-CoopSeat=<n>` argument, writes the network config and injects the newest `nativeuild\coopdll_*.dll`. Seat 0 is the host (UDP 40001 -> 40002), seat 1 the guest, both over 127.0.0.1.
-3. Optional: `tools\couchlink\perf_cmds.example.txt` -> `nativeuild\perf_cmds.txt` (console commands run in every copy once its hero exists), and `nativeuildutoload.txt` to press "Continue" in the main menu automatically.
-4. The helper writes its log to `nativeuild\couchlink_seat<n>.log`; a DLL injected too early never hooks (the game needs ~20-30 s after its process exists), hence the settle time.
+1. Copy the recipe to `%LOCALAPPDATA%\Couchlink\recipes\` and check the game path (`$GAME`) and the Steam app id in it.
+2. Start the "Gothic 1 Remake co-op (test copy)" recipe with 2 players. For every seat CouchLink starts the helper `tools\couchlink\couchlink_seat.vbs` (-> `couchlink_seat.ps1`), which finds the game process by its `-CoopSeat=<n>` argument, writes the network config and injects the newest `native\build\coopdll_*.dll`. Seat 0 is the host (UDP 40001 -> 40002), seat 1 the guest, both over 127.0.0.1.
+3. Optional: `tools\couchlink\perf_cmds.example.txt` -> `native\build\perf_cmds.txt` (console commands run in every copy once its hero exists), and `native\build\autoload.txt` to press "Continue" in the main menu automatically.
+4. The helper writes its log to `native\build\couchlink_seat<n>.log`; a DLL injected too early never hooks (the game needs ~20-30 s after its process exists), hence the settle time.
 
 The harness (`tools\harness_start.ps1`) does the same without CouchLink and is what the scripted tests use. A real second PC does not need either: use `tools\join.ps1` or the Co-op button of the main menu.
 
