@@ -453,6 +453,7 @@ __declspec(dllexport) void mod_update(CoreAPI *a)
             if (off) { if (a->puppet_mesh) set_visible(a, a->puppet_mesh, 1); destroy_comp(a); }
         }
     }
+    if (!P.off && !P.nocomp && P.failed <= 3 && !a->have_remote && a->puppet && a->puppet_mesh && now - P.last_vis > 500) { P.last_vis = now; set_visible(a, a->puppet_mesh, 0); }   /* before the friend's first packet (the game just started, the friend is still loading) the clip mesh would hang in the air in its T-pose */
     if (P.off || P.nocomp || P.failed > 3 || !a->have_remote || !a->puppet || !a->puppet_mesh) return;
     {   /* the friend sends nothing in the main menu or while loading: hide the puppet then (it would hang frozen, maybe mid-jump), and until the first pose has arrived */
         static int last_seen = -1; static unsigned long seen_t;
